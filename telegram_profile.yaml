@@ -1,0 +1,127 @@
+# Canonical Capability Matrix — Telegram Mode
+# This file defines the allowed and denied capabilities for the MeTTaClaw Telegram bot.
+
+domain:
+  messaging:
+    observe_channel_messages:
+      status: "Allowed"
+      guardrails: "Observation only; disclosed publicly; retention rules apply"
+      why: "Needed for silent context gathering and batching"
+    collect_messages_60s_window:
+      status: "Allowed"
+      guardrails: "Per-chat buffer; max 1 model call per chat per minute"
+      why: "Cost and concurrency control"
+    reply_when_directly_tagged:
+      status: "Allowed"
+      guardrails: "Same chat only; text replies only; multiple replies per window allowed if based on the window batch"
+      why: "Core Telegram function"
+    reply_not_directly_tagged:
+      status: "Denied"
+      why: "Avoid spam and ambient interference"
+    send_dm_to_new_chats:
+      status: "Denied"
+      why: "Prevent outreach / spam / covert contact"
+    send_media_files:
+      status: "Denied"
+      guardrails: "Text-only replies"
+      why: "Reduce abuse surface and data leakage risk"
+    moderation_powers:
+      status: "Denied"
+      why: "Keep bot out of channel governance"
+    mass_notify:
+      status: "Denied"
+      why: "Prevent spam and disruption"
+
+  web:
+    safe_search_lookup:
+      status: "Allowed with guardrails"
+      guardrails: "Snippets/titles/source URLs only; no clickthrough; no browser session"
+      why: "Permits lightweight factual lookup"
+    interactive_browsing:
+      status: "Denied"
+      why: "Too much external-action surface"
+    form_submission_login:
+      status: "Denied"
+      why: "World-acting behavior is out of scope"
+    arbitrary_http_requests:
+      status: "Denied"
+      why: "Prevent exfiltration and API abuse"
+
+  system:
+    shell_commands:
+      status: "Denied"
+      why: "Direct abuse surface"
+    privilege_escalation:
+      status: "Denied"
+      why: "Hard safety boundary"
+    file_read:
+      status: "Denied"
+      why: "Prevent secrets and data exfiltration"
+    file_write:
+      status: "Denied"
+      why: "Prevent code / payload drops"
+    send_upload_files:
+      status: "Denied"
+      why: "Prevent malware / document leakage"
+    browser_automation:
+      status: "Denied"
+      why: "Not needed in Telegram mode"
+    arbitrary_code_eval:
+      status: "Denied"
+      why: "Prevent capability expansion"
+
+  memory:
+    ephemeral_context_buffer:
+      status: "Allowed"
+      guardrails: "Expires automatically after reply or TTL"
+      why: "Needed for batching"
+    durable_channel_memory:
+      status: "Allowed with guardrails"
+      guardrails: "Telegram-local only; safe categories only; deleteable and auditable"
+      why: "Allows the bot to learn norms and repeated facts"
+    durable_user_preferences:
+      status: "Allowed with guardrails"
+      guardrails: "Must be user-visible, minimally scoped, deleteable, and non-sensitive"
+      why: "Useful personalization without surveillance"
+    durable_sensitive_traits:
+      status: "Denied"
+      why: "This is durable user profiling and is out of scope"
+    raw_archive_indefinite:
+      status: "Denied"
+      why: "Avoid surveillance risk"
+
+  learning:
+    create_candidate_skills:
+      status: "Allowed with guardrails"
+      guardrails: "Internal gated store only; no external actions; no files"
+      why: "Preserves self-improvement without dangerous powers"
+    rewrite_existing_skills:
+      status: "Allowed with guardrails"
+      guardrails: "Safety check, canary eval, rollback required"
+      why: "Controlled adaptation"
+    promote_skill_to_powers:
+      status: "Denied"
+      why: "Prevent capability creep"
+    cross_chat_linking:
+      status: "Denied"
+      why: "Privacy and isolation"
+
+  safety:
+    ethics_pass_before_search:
+      status: "Allowed"
+      why: "Prevent disallowed lookups"
+    ethics_pass_before_reply:
+      status: "Allowed"
+      why: "Prevent unsafe outputs"
+    ethics_pass_before_memory_write:
+      status: "Allowed"
+      why: "Controls long-term accumulation"
+
+  ops:
+    admin_pause_kill_switch:
+      status: "Allowed"
+      why: "Launch safety"
+    user_mute_cool_down:
+      status: "Allowed with guardrails"
+      guardrails: "Admin-visible; policy-defined thresholds"
+      why: "Operational control"

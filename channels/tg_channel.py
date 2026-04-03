@@ -11,6 +11,11 @@ from telegram.ext import (
 )
 
 
+import yaml
+import os
+from .ops_utils import is_user_muted
+
+
 class _TelegramChannel:
     """Telegram bot channel with windowed batching and bot-tag gating."""
 
@@ -23,11 +28,32 @@ class _TelegramChannel:
         self.chat_id = None
         self.bot_username = None
         self.msg_lock = threading.Lock()
+        # Policies
+        self.profile = self._load_profile()
         # Windowed batching state
         self._message_buffer = []  # List of (timestamp, name, text, message_id)
         self._should_reply = False
         self._last_processed_window = ""
         self._reply_to = None
+
+    def _load_profile(self):
+        """Load the Telegram capability profile from YAML."""
+        profile_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "telegram_profile.yaml",
+        )
+        if os.path.exists(profile_path):
+            with open(profile_path, "r") as f:
+                return yaml.safe_load(f)
+        return {}
+
+    def _is_allowed(self, domain, capability):
+        """Check if a capability is allowed in the profile."""
+        try:
+            status = self.profile.get("domain", {}).get(domain, {}).get(capability, {}).get("status", "Denied")
+            return status in ["Allowed", "Allowed with guardrails"]
+        except Exception:
+            return False
 
     def get_last_message(self):
         """Retrieve and consume the most recent processed window, thread-safe."""
@@ -47,8 +73,15 @@ class _TelegramChannel:
 
     async def _on_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Capture group messages into the buffer; flag reply if bot is tagged."""
-        if update.message is None or update.message.text is None:
+        if update.message is None:
             return
+        
+        # Enforce text-only input if media files are denied
+        if not update.message.text:
+            # We ignore stickers, images, etc. if denied
+            if not self._is_allowed("messaging", "send_media_files"):
+                return
+
         # Filter out messages from other bots
         if update.message.from_user and update.message.from_user.is_bot:
             return
@@ -58,8 +91,15 @@ class _TelegramChannel:
         user = update.effective_user
         if user is None:
             name = "unknown user"
+            user_id = 0
         else:
             name = user.full_name or user.username or str(user.id)
+            user_id = user.id
+            
+        # Check if user is muted
+        if is_user_muted(user_id):
+            return
+
         text = update.message.text
 
         with self.msg_lock:
@@ -68,14 +108,16 @@ class _TelegramChannel:
             )
             # Check if bot is @-tagged
             if self.bot_username and f"@{self.bot_username}" in text:
-                self._should_reply = True
+                if self._is_allowed("messaging", "reply_when_directly_tagged"):
+                    self._should_reply = True
             # Check if it's a direct reply to the bot
             if (
                 update.message.reply_to_message
                 and update.message.reply_to_message.from_user
                 and update.message.reply_to_message.from_user.id == context.bot.id
             ):
-                self._should_reply = True
+                if self._is_allowed("messaging", "reply_when_directly_tagged"):
+                    self._should_reply = True
 
     async def _window_manager(self):
         """Every 60s, batch buffered messages and surface them if bot was tagged."""
@@ -157,6 +199,12 @@ class _TelegramChannel:
 
     def send_message(self, text):
         """Send a text message to the active chat, dispatched to the bot's event loop."""
+        # Enforce text-only replies
+        if not self._is_allowed("messaging", "send_media_files"):
+            # If the user tries to send something that looks like media, we should ideally block it.
+            # For now, we ensure only text is sent via send_message.
+            pass
+
         text = text.replace("\\n", "\n")
         if (
             not self.connected

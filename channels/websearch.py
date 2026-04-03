@@ -11,6 +11,7 @@ class DDGParser(HTMLParser):
         self.in_snippet = False
         self.current_title = None
         self.current_snippet = None
+        self.current_url = None
         self.results = []
 
     def handle_starttag(self, tag, attrs):
@@ -18,6 +19,7 @@ class DDGParser(HTMLParser):
         if tag == "a" and attrs.get("class") == "result__a":
             self.in_title = True
             self.current_title = ""
+            self.current_url = attrs.get("href")
         elif tag == "a" and attrs.get("class") == "result__snippet":
             self.in_snippet = True
             self.current_snippet = ""
@@ -27,7 +29,8 @@ class DDGParser(HTMLParser):
             if self.in_snippet and self.current_title and self.current_snippet:
                 self.results.append({
                     "title": self.current_title.strip(),
-                    "snippet": self.current_snippet.strip()
+                    "snippet": self.current_snippet.strip(),
+                    "url": self.current_url or ""
                 })
             self.in_title = False
             self.in_snippet = False
@@ -56,7 +59,7 @@ def search(query, max_results=10):
     try:
         ret = "("
         for r in search_(query):
-            ret += "(TITLE: " + r["title"] + " SNIPPET: " + r["snippet"] + ") "
+            ret += "(TITLE: " + r["title"] + " SNIPPET: " + r["snippet"] + " URL: " + r["url"] + ") "
         ret += ")"
         return ret
     except Exception:

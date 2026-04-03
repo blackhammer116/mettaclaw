@@ -37,3 +37,8 @@
 
 (= (query $str)
    (py-call (lib_chromadb.query (useGPTEmbedding (string-safe $str)) (maxRecallItems))))
+
+(= (delete-preference $key)
+   (if (isTelegram)
+       (py-call (lib_chromadb.delete_preference $key))
+       (Error delete-preference "Only available in Telegram mode.")))

@@ -34,8 +34,8 @@
           ($else $sexpr)))
        $sexpr))
 
-(= (is-unsafe $s) (or (== $s "bomb") (== $s "malware") (== $s "exploit") (== $s "hack") (== $s "weapon") (== $s "illegal")))
-(= (is-sensitive $s) (or (== $s "politics") (== $s "health") (== $s "religion") (== $s "race") (== $s "gender") (== $s "identity")))
+;(= (is-unsafe $s) (or (== $s "bomb") (== $s "malware") (== $s "exploit") (== $s "hack") (== $s "weapon") (== $s "illegal")))
+;(= (is-sensitive $s) (or (== $s "politics") (== $s "health") (== $s "religion") (== $s "race") (== $s "gender") (== $s "identity")))
 
 (= (mettaclaw)
    (mettaclaw 1))

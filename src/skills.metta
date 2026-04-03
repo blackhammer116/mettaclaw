@@ -1,7 +1,6 @@
 (= (getSkills)
    (if (isTelegram)
-       (;TELEGRAM ALLOWED SKILLS:
-        "- Remember a particular string: (remember string)"
+       ("- Remember a particular string: (remember string)"
         "- Query long-term embedding memory: (query string)"
         "- Pin a short-term working memory item: (pin string)"
         "- Send message to user: (send string)"

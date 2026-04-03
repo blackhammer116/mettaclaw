@@ -7,6 +7,8 @@
 !(import_prolog_function swrite)
 !(import_prolog_function sread)
 !(import_prolog_function string_concat)
+!(import_prolog_function string_lower)
+!(import_prolog_function sub_string)
 
 (= (sleep $t)
    (progn (translatePredicate (sleep $t))
@@ -21,6 +23,33 @@
 
 (= (string-safe $str)
    (string-replace (string-replace (string-replace $str "\"\"" "_quote_") "\n" "_newline_") "'" "_apostrophe_"))
+
+(= (to-lower $str)
+   (progn (translatePredicate (string_lower $str $lower))
+          $lower))
+
+(= (contains $str $sub)
+   (let $k (collapse (translatePredicate (sub_string $str $_ $_ $_ $sub)))
+        (not (== $k ()))))
+
+(= (is-unsafe $s)
+   (let $lower (to-lower $s)
+        (or (contains $lower "bomb")
+            (or (contains $lower "malware")
+                (or (contains $lower "exploit")
+                    (or (contains $lower "weapon")
+                        (or (contains $lower "illegal")
+                            (contains $lower "hacking"))))))))
+
+(= (is-sensitive $s)
+   (let $lower (to-lower $s)
+        (or (contains $lower "politics")
+            (or (contains $lower "health")
+                (or (contains $lower "religion")
+                    (or (contains $lower "race")
+                        (or (contains $lower "gender")
+                            (or (contains $lower "identity")
+                                (contains $lower "profiling")))))))))
 
 (= (get_time_as_string)
    (progn (translatePredicate (format_time (Predicate (string $String)) "%Y-%m-%d %H:%M:%S" (get_time)))
