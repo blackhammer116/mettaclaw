@@ -52,18 +52,15 @@ class _TelegramChannel:
         self.load_config(self.config_path)
         self.load_policies()
 
-        # self.local_memory = self._load_local_memory()
         self._muted_users = {}
         self._user_msg_rates = {}
         self._user_mute_counts = {}
         
         # Windowed batching state
-        self._message_buffers = {}
-        self._should_reply = {}
+        self._message_queue = []
         self._reply_to_ids = {}
         self._paused_chats = set()
         self.search_disabled = False
-        self._last_processed_window = None
         self._ready_windows = []
         self._polling_task = None
 
@@ -127,8 +124,8 @@ class _TelegramChannel:
     def get_last_message(self):
         """Retrieve and consume the most recent processed window, thread-safe."""
         with self.msg_lock:
-            if self._ready_windows:
-                ready_chat_id, text, reply_id = self._ready_windows.pop(0)
+            if self._message_queue:
+                ready_chat_id, text, reply_id = self._message_queue.pop(0)
                 self.chat_id = ready_chat_id
                 self._reply_to_id = reply_id
                 return text
@@ -256,25 +253,18 @@ class _TelegramChannel:
         user = message.from_user
         name = "unknown user" if user is None else (user.full_name or user.username or str(user.id))
         text = message.text
+
+        is_tagged = self.bot_username and f"@{self.bot_username}" in text
+        is_reply = (self.reply_on_reply and 
+                    message.reply_to_message and 
+                    message.reply_to_message.from_user and 
+                    message.reply_to_message.from_user.id == self.bot_id)
+        
+        if self.reply_only_on_tag and not (is_tagged or is_reply):
+            return
         
         with self.msg_lock:
-            if chat_id not in self._message_buffers:
-                self._message_buffers[chat_id] = []
-                self._should_reply[chat_id] = False
-
-            self._message_buffers[chat_id].append((time.time(), name, text, message.message_id))
-
-            # Limiting to 50 msg per chat
-            self._message_buffers[chat_id] = self._message_buffers[chat_id][-50:]
-            # Use rules from config
-            is_tagged = self.bot_username and f"@{self.bot_username}" in text
-            is_reply = (self.reply_on_reply and 
-                        message.reply_to_message and 
-                        message.reply_to_message.from_user and 
-                        message.reply_to_message.from_user.id == self.bot_id)
-            
-            if not self.reply_only_on_tag or is_tagged or is_reply:
-                self._should_reply[chat_id] = True
+            self._message_queue.append((chat_id, f"{name}: {text}", message.message_id))
             
 
     async def _window_manager(self):
@@ -363,11 +353,6 @@ class _TelegramChannel:
 
             
             self.connected = True
-            
-            # Start window manager
-            asyncio.create_task(self._window_manager())
-            
-            # Start polling as a task so we can cancel it
             self._polling_task = asyncio.create_task(self.dp.start_polling(self.bot, skip_updates=True, handle_signals=False))
             await self._polling_task
         except asyncio.CancelledError:
@@ -428,17 +413,8 @@ class _TelegramChannel:
 _channel = _TelegramChannel()
 
 def getLastMessage():
-    """Return the last processed batch window."""
-    timeout = 5
-    start_time = time.time()
-    while time.time() - start_time < timeout:
-        last_msg = _channel.get_last_message()
-        if last_msg is not None:
-            return str(last_msg)
-        
-        time.sleep(1)
-        
-    return ""
+    """Return the last processed batch window."""        
+    return _channel.get_last_message()
 
 def start_telegram(token, chat_id=None):
     """Initialize and start the Telegram bot."""
