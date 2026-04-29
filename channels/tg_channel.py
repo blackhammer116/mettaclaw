@@ -1,21 +1,26 @@
 import asyncio
 import time
 import threading
-import time
 import logging
-from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command
-
 import yaml
 import os
+import re
 
-log_file_path = os.path.join(os.path.dirname(__file__), "..", "telegram_bot.log")
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.filters import Command
+from src.config_helper import is_category_blocked, get_spam_protection_config
+
+
+log_dir = os.path.join(os.path.dirname(__file__), "..", "logs")
+os.makedirs(log_dir, exist_ok=True)
+log_file = os.path.join(log_dir, "telegram.log")
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
-        logging.FileHandler(log_file_path),
-        logging.StreamHandler()
+        logging.StreamHandler(),
+        logging.FileHandler(log_file)
     ]
 )
 
@@ -32,16 +37,21 @@ class _TelegramChannel:
         self.dp = None
         self.connected = False
         self.chat_id = None
+        self.allowed_chat_id = None
+        self.allowed_chat_ids = set()
+        
         self.bot_username = None
         self.bot_id = None
         self.msg_lock = threading.Lock()
         
         # Default settings
-        self.window_seconds = 5
         self.reply_only_on_tag = True
         self.reply_on_reply = True
         self.admin_ids = []
         self.dm_enabled = False
+        self.restrict_to_config_chat = True
+        self.allow_group_bots = False
+        self.reply_constraints = None
         
         # Policy messages
         self.start_msg = "Telegram mode active."
@@ -64,6 +74,44 @@ class _TelegramChannel:
         self._ready_windows = []
         self._polling_task = None
 
+    def _normalize_chat_id(self, chat_id):
+        if chat_id is None:
+            return None
+
+        chat_id = str(chat_id).strip("\"' ")
+        if not chat_id:
+            return None
+
+        if not chat_id.startswith("-") and chat_id.isdigit() and len(chat_id) > 10:
+            chat_id = f"-{chat_id}"
+
+        return chat_id
+
+    def _normalize_chat_ids(self, chat_ids):
+        if chat_ids is None:
+            return set()
+
+        if isinstance(chat_ids, (list, tuple, set)):
+            values = chat_ids
+        else:
+            values = str(chat_ids).split(",")
+
+        normalized = set()
+        for chat_id in values:
+            value = self._normalize_chat_id(chat_id)
+            if value:
+                normalized.add(value)
+        return normalized
+
+    def _is_allowed_chat(self, chat_id):
+        if not self.restrict_to_config_chat:
+            return True
+
+        if not self.allowed_chat_ids:
+            return True
+
+        return self._normalize_chat_id(chat_id) in self.allowed_chat_ids
+
     def load_config(self, config_path):
         """Load bot configuration from a YAML file."""
         if not os.path.exists(config_path):
@@ -80,7 +128,12 @@ class _TelegramChannel:
             self.reply_only_on_tag = tg_cfg.get("reply_only_when_directly_tagged", True)
             self.reply_on_reply = tg_cfg.get("reply_on_reply_to_bot", True)
             self.dm_enabled = tg_cfg.get("dm_support", {}).get("enabled", False)
+            self.restrict_to_config_chat = tg_cfg.get("restrict_to_config_chat", True)
+            self.allow_group_bots = tg_cfg.get("allow_group_bots", False)
+            self.allowed_chat_ids = self._normalize_chat_ids(tg_cfg.get("allowed_chats", []))
+            self.allowed_chat_id = next(iter(self.allowed_chat_ids), None)
             self.admin_ids = config.get("admin_controls", {}).get("admin_ids", [])
+            self.reply_constraints = tg_cfg.get("reply_constraints", {})
 
             logging.info(f"Loaded config from {config_path}: window={self.window_seconds}s, tag_only={self.reply_only_on_tag}")
         except Exception as e:
@@ -126,16 +179,47 @@ class _TelegramChannel:
         with self.msg_lock:
             if self._message_queue:
                 ready_chat_id, text, reply_id = self._message_queue.pop(0)
+
+                if not self._is_allowed_chat(ready_chat_id) and ready_chat_id not in self.admin_ids:
+                        return None
+                
                 self.chat_id = ready_chat_id
                 self._reply_to_id = reply_id
-                return text
+                return f"[{ready_chat_id}] {text}"
             return None
+    
+    def _is_admin_dm(self, message: types.Message) -> bool:
+
+        return (
+            message.chat.type == "private"
+            and message.from_user is not None
+            and message.from_user.id in self.admin_ids
+        )
+    
+    def _is_chat_authorized(self, message: types.Message, user_id_override: int = None) -> bool:
+        """Check if the chat and user are authorized to interact with the bot."""
+        
+        # Handle Dms
+        if message.chat.type == "private":
+            user_id = user_id_override if user_id_override is not None else getattr(message.from_user, "id", None)
+            if user_id not in self.admin_ids and not self.dm_enabled:
+                return False
+            return True
+        
+        # Handle Groups
+        if not self._is_allowed_chat(message.chat.id):
+            return False
+                
+        return True
     
     async def _start_cmd(self, message: types.Message):
         """Handle the /start command with interactive buttons."""
-        if message.chat is not None:
-            self.chat_id = message.chat.id
+        if not self._is_chat_authorized(message):
+            return
         
+        if not self._is_admin_dm(message):
+            return await message.answer("❌ Admin commands only work in direct messages.")
+
         from aiogram.utils.keyboard import InlineKeyboardBuilder
         builder = InlineKeyboardBuilder()
         builder.button(text="ℹ️ About", callback_data="show_about")
@@ -148,29 +232,35 @@ class _TelegramChannel:
 
     async def _about_cmd(self, message: types.Message):
         """Handle /about command."""
+
         await message.answer(self.about_msg)
 
     async def _privacy_cmd(self, message: types.Message):
         """Handle /privacy command."""
+        if not self._is_chat_authorized(message):
+            return
+
         await message.answer(self.privacy_msg)
 
     async def _kill_cmd(self, message: types.Message):
         """Handle global kill switch (admin only)."""
-        user_id = message.from_user.id if message.from_user else None
-        if user_id in self.admin_ids:
-            await message.answer("⚠️ Global Kill Switch activated. Shutting down...")
-            logging.critical(f"KILLED by admin {user_id}")
-            self.stop()
-            os._exit(0)
-        else:
-            await message.answer("❌ Access denied. Admin only.")
+        if not self._is_admin_dm(message):
+            return await message.answer("❌ Admin commands only work in direct messages.")
+
+        await message.answer("⚠️ Global Kill Switch activated. Shutting down...")
+        logging.critical(f"KILLED by admin {message.from_user.id}")
+        self.stop()
+        os._exit(0)
     
     async def _pause_cmd(self, message: types.Message):
         """Handle /pause command (admin only)."""
-        if str(message.from_user.id) not in self.admin_ids:
-            return await message.answer("❌ Access denied.")
+        if not self._is_chat_authorized(message):
+            return
         
-        target_chat = message.chat.id
+        if not self._is_admin_dm(message):
+             return await message.answer("❌ Admin commands only work in direct messages.")
+        
+        target_chat = self.allowed_chat_id or getattr(message.chat, "id", None)
         args = message.text.split()
         if len(args) > 1:
             target_chat = args[1]
@@ -184,19 +274,18 @@ class _TelegramChannel:
 
     async def _togglesearch_cmd(self, message: types.Message):
         """Handle /togglesearch command (admin only)."""
-        if message.from_user.id not in self.admin_ids:
-            return await message.answer("❌ Access denied.")
-        
+        if not self._is_admin_dm(message):
+            return await message.answer("❌ Admin commands only work in direct messages.")
+
         self.search_disabled = not self.search_disabled
         state = "DISABLED" if self.search_disabled else "ENABLED"
         await message.answer(f"🔍 Web search is now {state}.")
-
     
     async def _purge_cmd(self, message: types.Message):
         """Handle /purge command (admin only)."""
-        if message.from_user.id not in self.admin_ids:
-            return await message.answer("❌ Access denied.")
-        
+        if not self._is_admin_dm(message):
+            return await message.answer("❌ Admin commands only work in direct messages.")
+
         try:
             import chromadb
             client = chromadb.PersistentClient(path="./chroma_db")
@@ -209,6 +298,10 @@ class _TelegramChannel:
 
     async def _on_callback_query(self, callback: types.CallbackQuery):
         """Handle button clicks."""
+        if not self._is_chat_authorized(callback.message, user_id_override=callback.from_user.id):
+            await callback.answer("❌ This chat is not authorized.", show_alert=True)
+            return
+        
         if callback.data == "show_about":
             await callback.message.answer(self.about_msg)
         elif callback.data == "show_privacy":
@@ -235,17 +328,25 @@ class _TelegramChannel:
         if message.chat.id in self._paused_chats:
             return
 
-        # Check DM support
-        if message.chat.type == "private":
-            if getattr(message.from_user, "id", None) not in self.admin_ids and not self.dm_enabled:
-                return
+        if not self._is_chat_authorized(message):
+            return
         
-        # Filter out messages from other bots
+        # Filter out messages from other bots and muted users
         if message.from_user:
-            if message.from_user.is_bot:
-                return
+            if message.chat.type in ["group", "supergroup"]:
+                if message.from_user.is_bot and not self.allow_group_bots:
+                    return
+            
             if await self.is_user_muted(message.from_user):
                 return
+        
+        has_media = bool(message.photo or message.video or message.audio or message.voice)
+        if has_media and not self.reply_constraints.get("allow_media", False):
+            return
+            
+        has_files = bool(message.document)
+        if has_files and not self.reply_constraints.get("allow_files", False):
+            return
 
         if message.chat is not None:
             chat_id = message.chat.id
@@ -254,41 +355,38 @@ class _TelegramChannel:
         name = "unknown user" if user is None else (user.full_name or user.username or str(user.id))
         text = message.text
 
-        is_tagged = self.bot_username and f"@{self.bot_username}" in text
-        is_reply = (self.reply_on_reply and 
-                    message.reply_to_message and 
-                    message.reply_to_message.from_user and 
-                    message.reply_to_message.from_user.id == self.bot_id)
-        
-        if self.reply_only_on_tag and not (is_tagged or is_reply):
+        if await is_category_blocked(text):
+            logging.warning(f"Ethics/Security pass rejected incoming message from {name}: {text}")
+            message = "From: " + user.username + ": " + text if user and user.username else text
+            alert_ethics_violation("incoming_message", message)
             return
+
+        is_private = message.chat.type == "private"
+        if not is_private:
+            is_tagged = self.bot_username and f"@{self.bot_username}" in text
+            is_reply = (
+                self.reply_on_reply and
+                message.reply_to_message and
+                message.reply_to_message.from_user and
+                message.reply_to_message.from_user.id == self.bot_id
+            )
+
+            if self.reply_only_on_tag and not (is_tagged or is_reply):
+                return
         
         with self.msg_lock:
             self._message_queue.append((chat_id, f"{name}: {text}", message.message_id))
             
 
-    async def _window_manager(self):
-        """Every window_seconds, batch buffered messages and surface them if bot was tagged."""
-        while self.running:
-            await asyncio.sleep(self.window_seconds)
-            with self.msg_lock:
-                for chat_id in list(self._message_buffers.keys()):
-                    buffer = self._message_buffers[chat_id]
-                    if not buffer:
-                        continue
-                    
-                    if self._should_reply.get(chat_id, False):
-                        batched = "\n".join([f"{m[1]}: {m[2]}" for m in buffer])
-                        reply_id = buffer[-1][3]
-                        self._ready_windows.append((chat_id, batched, reply_id))
-                        
-                    self._message_buffers[chat_id] = []
-                    self._should_reply[chat_id] = False
-                
-
     async def is_user_muted(self, user: types.User):
         """Feature: User mute / cool-down after repeated abuse."""
+        spam_config = get_spam_protection_config()
+        time_window = spam_config["time_window"]
+        message_limit = spam_config["message_limit"]
+        cooldown_duration = spam_config["cooldown_duration"]
+        admin_alert_threshold = spam_config["admin_alert_threshold"]
         user_id = user.id
+
         if user_id in self._muted_users:
             if time.time() < self._muted_users[user_id]:
                 return True
@@ -297,19 +395,19 @@ class _TelegramChannel:
                 
         now = time.time()
         history = self._user_msg_rates.get(user_id, [])
-        history = [ts for ts in history if now - ts < 10] # 10 second window for rate limiting
+        history = [ts for ts in history if now - ts < time_window]
         history.append(now)
         self._user_msg_rates[user_id] = history
         
-        if len(history) > 5:
+        if len(history) > message_limit:
             mute_count = self._user_mute_counts.get(user_id, 0) + 1
             self._user_mute_counts[user_id] = mute_count
 
             username = user.username or user.full_name or str(user_id)
             logging.warning(f"User with id: {user_id} | username: {username} muted for spamming.")
-            self._muted_users[user_id] = now + 120 # 2 minute cool-down
+            self._muted_users[user_id] = now + cooldown_duration
             
-            if mute_count >= 3:
+            if mute_count >= admin_alert_threshold:
                 for admin_id in self.admin_ids:
                     try:
                         alert_msg = (f"🚨 **Spam Alert** 🚨\n"
@@ -325,6 +423,9 @@ class _TelegramChannel:
 
     async def _on_media_rejected(self, message: types.Message):
         """Feature: Block files, images, audio, voice notes."""
+        if not self._is_chat_authorized(message):
+            return
+        
         logging.info("Denied capability invoked: Media/File uploaded. Discarding.")
         # Silently discard to prevent abuse surface / leakage
         pass
@@ -339,6 +440,22 @@ class _TelegramChannel:
             bot_info = await self.bot.get_me()
             self.bot_username = bot_info.username
             self.bot_id = bot_info.id
+
+            chat_ids_for_admin_scan = list(self.allowed_chat_ids)
+            if self.chat_id:
+                normalized_chat_id = self._normalize_chat_id(self.chat_id)
+                if normalized_chat_id:
+                    chat_ids_for_admin_scan.append(normalized_chat_id)
+
+            for eval_chat_id in dict.fromkeys(chat_ids_for_admin_scan):
+                try:
+                    admins = await self.bot.get_chat_administrators(eval_chat_id)
+                    for admin in admins:
+                        if admin.user.id not in self.admin_ids:
+                            self.admin_ids.append(int(admin.user.id))
+                    logging.info(f"Loaded admins from group {eval_chat_id}. Total admins: {len(self.admin_ids)}")
+                except Exception as e:
+                    logging.error(f"Failed to fetch administrators for chat {eval_chat_id}: {e}")
             
             self.dp.message.register(self._start_cmd, Command("start"))
             self.dp.message.register(self._about_cmd, Command("about"))
@@ -351,7 +468,6 @@ class _TelegramChannel:
             self.dp.message.register(self._on_message, F.text)
             self.dp.message.register(self._on_media_rejected, ~F.text)
 
-            
             self.connected = True
             self._polling_task = asyncio.create_task(self.dp.start_polling(self.bot, skip_updates=True, handle_signals=False))
             await self._polling_task
@@ -379,15 +495,21 @@ class _TelegramChannel:
     def start(self, token, chat_id=None, config_path=None):
         """Launch the Telegram bot on a daemon thread and begin polling."""
         self.running = True
-        self.chat_id = chat_id
         # Reload config if path provided
         if config_path is None:
             self.load_config(self.config_path)
+
+        runtime_chat_ids = self._normalize_chat_ids(chat_id)
+        if runtime_chat_ids:
+            self.allowed_chat_ids.update(runtime_chat_ids)
+            self.allowed_chat_id = next(iter(self.allowed_chat_ids), None)
+            self.chat_id = next(iter(runtime_chat_ids))
+        else:
+            self.chat_id = self.allowed_chat_id
             
         self.thread = threading.Thread(target=self._thread_main, args=(token,), daemon=True)
         self.thread.start()
         return self.thread
-        # return "OK"
 
     def stop(self):
         """Signal the polling loop to stop gracefully."""
@@ -395,20 +517,38 @@ class _TelegramChannel:
         if self.loop and self._polling_task:
             self.loop.call_soon_threadsafe(self._polling_task.cancel)
 
-    def send_message(self, text):
+    def send_message(self, text, chat_id=None):
         """Send a text message to the active chat, dispatched to the bot's event loop."""
         text = text.replace("\\n", "\n")
-        if not self.connected or self.bot is None or self.loop is None or self.chat_id is None:
+        
+        target_chat_id = chat_id or self.chat_id
+        
+        if not self.connected or self.bot is None or self.loop is None or target_chat_id is None:
             return
         
         fut = asyncio.run_coroutine_threadsafe(
-            self.bot.send_message(chat_id=self.chat_id, text=text, reply_to_message_id=self._reply_to_id),
+            self.bot.send_message(chat_id=target_chat_id,
+                                  text=text,
+                                  reply_to_message_id=self._reply_to_id if target_chat_id == self.chat_id else None,
+                                  parse_mode="MarkdownV2"),
             self.loop,
         )
         try:
             fut.result(timeout=10)
-        except Exception:
-            pass
+        except Exception as e:
+            logging.error(f"Telegram formatting error, falling back to plain text: {e}")
+            fut_fallback = asyncio.run_coroutine_threadsafe(
+                self.bot.send_message(
+                    chat_id=target_chat_id, 
+                    text=text, 
+                    reply_to_message_id=self._reply_to_id if target_chat_id == self.chat_id else None
+                ),
+                self.loop,
+            )
+            try:
+                fut_fallback.result(timeout=10)
+            except Exception:
+                pass
 
 _channel = _TelegramChannel()
 
@@ -423,10 +563,9 @@ def start_telegram(token, chat_id=None):
     
     token = str(token).strip("\"' ")
     
-    if isinstance(chat_id, list) and len(chat_id) > 0:
-        chat_id = str(chat_id[0])
-
-    if chat_id is not None:
+    if isinstance(chat_id, list):
+        chat_id = [str(item).strip("\"' ") for item in chat_id if str(item).strip("\"' ")]
+    elif chat_id is not None:
         chat_id = str(chat_id).strip("\"' ")
             
     return _channel.start(token, chat_id)
@@ -436,20 +575,38 @@ def stop_telegram():
     _channel.stop()
 
 def send_message(text):
-    """Send a message to the active Telegram chat."""
-    _channel.send_message(text)
+    """Send a message to the active Telegram chat."""    
+    target_chat_id = _channel.chat_id
+    
+    m = re.match(r'^\[(-?\d+)\]\s*(.*)$', text, re.DOTALL)
+    if m:
+        target_chat_id = m.group(1)
+        text = m.group(2)
+
+    # Run the async check safely in a synchronous context
+    try:
+        loop = asyncio.get_running_loop()
+        is_blocked = loop.run_until_complete(is_category_blocked(text))
+    except RuntimeError:
+        is_blocked = asyncio.run(is_category_blocked(text))
+
+    if is_blocked:
+        alert_ethics_violation("send", text)
+        return "Error: Refused: Unsafe response content."
+        
+    _channel.send_message(text, chat_id=target_chat_id)
 
 def is_search_disabled():
     """Check if admin disabled searching."""
     return _channel.search_disabled
 
-def alert_ethics_violation(tool_name):
+def alert_ethics_violation(tool_name, text=None):
     """Allow MeTTa to trigger an ethics alert DM to admins."""
     if _channel.loop and _channel.bot:
         for admin_id in _channel.admin_ids:
             try:
                 fut = asyncio.run_coroutine_threadsafe(
-                    _channel.bot.send_message(chat_id=admin_id, text=f"🚨 Ethics Pass Triggered!\nAction Blocked: {tool_name}"),
+                    _channel.bot.send_message(chat_id=admin_id, text=f"🚨 Ethics Pass Triggered!\nAction Blocked: {tool_name} | With message: {text}"),
                     _channel.loop
                 )
             except Exception:
