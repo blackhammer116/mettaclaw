@@ -57,22 +57,22 @@ jobs:
           envs: IMAGE,ASI_API_KEY,OPENAI_API_KEY,ANTHROPIC_API_KEY,BOT_TOKEN,CHAT_ID
           script: |
             set -e
-            mkdir -p /opt/omegaclaw
-            cat > /opt/omegaclaw/.env <<EOF
+            mkdir -p /omegaclaw
+            cat > /omegaclaw/.env <<EOF
             ASI_API_KEY=${ASI_API_KEY}
             OPENAI_API_KEY=${OPENAI_API_KEY}
             ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
             BOT_TOKEN=${BOT_TOKEN}
             CHAT_ID=${CHAT_ID}
             EOF
-            chmod 600 /opt/omegaclaw/.env
+            chmod 600 /omegaclaw/.env
 
             docker pull "${IMAGE}"
             docker rm -f omegaclaw 2>/dev/null || true
             docker run -d \
               --name omegaclaw \
               --restart=always \
-              --env-file /opt/omegaclaw/.env \
+              --env-file /omegaclaw/.env \
               "${IMAGE}"
         env:
           IMAGE: ${{ needs.prep.outputs.image }}
