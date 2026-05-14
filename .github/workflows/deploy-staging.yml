@@ -2,7 +2,7 @@ name: Deploy (staging)
 
 on:
   push:
-    branches: [telegram]
+    branches: [ci/cd(test)]
   workflow_dispatch:
 
 concurrency:
