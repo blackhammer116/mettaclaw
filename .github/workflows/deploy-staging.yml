@@ -57,21 +57,21 @@ jobs:
           envs: IMAGE,ASI_API_KEY,OPENAI_API_KEY,ANTHROPIC_API_KEY,BOT_TOKEN,CHAT_ID,LLM_PROVIDER,LLM_MODEL
           script: |
             set -e
-            sudo mkdir -p /omegaclaw
-            sudo tee /omegaclaw/.env > /dev/null <<EOF
+            mkdir -p /omegaclaw
+            tee /omegaclaw/.env > /dev/null <<EOF
             ASI_API_KEY=${ASI_API_KEY}
             OPENAI_API_KEY=${OPENAI_API_KEY}
             ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
             BOT_TOKEN=${BOT_TOKEN}
             CHAT_ID=${CHAT_ID}
             EOF
-            sudo chmod 600 /omegaclaw/.env
+            chmod 600 /omegaclaw/.env
 
-            sudo mkdir -p /Backup/docker/PeTTa
+            mkdir -p /Backup/docker/PeTTa
 
-            sudo docker pull "${IMAGE}"
-            sudo docker rm -f omegaclaw 2>/dev/null || true
-            sudo docker run -d \
+            docker pull "${IMAGE}"
+            docker rm -f omegaclaw 2>/dev/null || true
+            docker run -d \
               --name omegaclaw \
               --restart=always \
               --env-file /omegaclaw/.env \
