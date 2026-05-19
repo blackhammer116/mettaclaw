@@ -52,7 +52,7 @@ jobs:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          envs: IMAGE,ASI_API_KEY,OPENAI_API_KEY,ANTHROPIC_API_KEY,BOT_TOKEN,CHAT_ID,LLM_PROVIDER,LLM_MODEL
+          envs: IMAGE,ASI_API_KEY,OPENAI_API_KEY,ANTHROPIC_API_KEY,OPENROUTER_API_KEY,BOT_TOKEN,CHAT_ID,LLM_PROVIDER,LLM_MODEL
           script: |
             set -e
             mkdir -p /omegaclaw
@@ -60,6 +60,7 @@ jobs:
             ASI_API_KEY=${ASI_API_KEY}
             OPENAI_API_KEY=${OPENAI_API_KEY}
             ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+            OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
             BOT_TOKEN=${BOT_TOKEN}
             CHAT_ID=${CHAT_ID}
             EOF
@@ -86,7 +87,8 @@ jobs:
           ASI_API_KEY: ${{ secrets.ASI_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
-          LLM_PROVIDER: ${{ vars.LLM_PROVIDER }}
+          LLM_PROVIDER: ${{ secrets.LLM_PROVIDER }}
           LLM_MODEL: ${{ vars.LLM_MODEL }}
