@@ -89,4 +89,4 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
-          LLM_PROVIDER: ${{ vars.LLM_PROVIDER }}
+          LLM_PROVIDER: ${{ secrets.LLM_PROVIDER }}
