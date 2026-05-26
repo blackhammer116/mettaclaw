@@ -52,7 +52,7 @@ jobs:
           client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
           client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
           project-slug: ${{ secrets.INFISICAL_PROJECT_SLUG }}
-          env-slug: dev
+          env-slug: prod
 
       - name: Deploy to production server
         uses: appleboy/ssh-action@v1.2.0
