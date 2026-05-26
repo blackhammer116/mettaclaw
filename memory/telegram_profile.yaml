@@ -11,6 +11,8 @@ telegram:
   restrict_to_config_chat: true
   allowed_chats:
     - "-5077329264"
+    - "-1003951566228"
+
   allow_group_bots: true
   dm_support:
     enabled: false
