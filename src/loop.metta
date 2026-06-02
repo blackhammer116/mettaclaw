@@ -187,4 +187,6 @@
                  _)))
 
       (sleep (sleepInterval))
+                      (cut)
+                      (gc)
       (omegaclaw (+ 1 $k))))
