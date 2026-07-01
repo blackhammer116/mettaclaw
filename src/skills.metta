@@ -35,20 +35,22 @@
 
 ;; Skills for frame management
 (= (contextFramesSkills)
-      ("CONTEXT_FRAME_SKILLS:"
-       "- Create a new top-level frame from a task description: new-frame string"
-       "- Create a new slow autonomous frame: new-autonomous-frame string"
-       "- Switch current focus to frame ID: switch-frame frameID"
-       "- To switch between Slow mode and Fast mode: switch-mode"
-       "- Show the bounded RootFrame: show-root-frame"
-       "- Show the current focused Frame: show-current-frame"
-       "- Show the external FrameRef index space: show-frame-index"
-       "- Show the active external frame space: show-active-framespace"
-       "- Show the completed external frame space: show-completed-framespace"
-       "- Add a hypothesis to the current focused Frame: ctx-add-hypothesis id hypothesis"
-       "- Add a result entry to the current focused Frame: ctx-add-result variant metrics"
-       "- Complete the current focused Frame and store compact summary in STM: complete-goals-stm string"
-       "- Complete the current focused Frame and store reusable summary in LTM: complete-goals-ltm string"
+      ("CONTEXT_FRAME_MANAGEMENT_SKILLS:"
+       "- Create a new top-level frame from a task description: new-frame string" (newline)
+       "- Create a new slow autonomous frame: new-autonomous-frame string" (newline)
+       "- To switch between Slow mode and Fast mode: switch-mode" (newline)
+       "- Switch current focus to frame ID: switch-frame frameID" (newline)
+       "- To keep your self alive while pursuing Frames is Slow mode: send_probe" (newline)
+       "- Show the bounded RootFrame: show-root-frame" (newline)
+       "- Show the current focused Frame: show-current-frame" (newline)
+       "- Show the external FrameRef index space: show-frame-index" (newline)
+       "- Show the active external frame space: show-active-framespace" (newline)
+       "- Show the completed external frame space: show-completed-framespace" (newline)
+       "- Show the relation/dependency of a frame for composition and unified task management: show-frame-relation frameID" (newline)
+       "- Add a hypothesis to the current focused Frame: ctx-add-hypothesis id hypothesis" (newline)
+       "- Add a result entry to the current focused Frame: ctx-add-result variant metrics" (newline)
+       "- Complete the current focused Frame and store compact summary in STM: complete-goals-stm string" (newline)
+       "- Complete the current focused Frame and store reusable summary in LTM: complete-goals-ltm string" (newline)
        "- Clear transient hypotheses/results from current focused Frame: clear-frame-junk string"))
 
 (= (read-file $file)

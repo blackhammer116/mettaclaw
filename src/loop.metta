@@ -95,16 +95,14 @@
 
              ; New input becomes frame state before prompting.
              ($_ (if (and $msgnew (== (useFrames) True))
-                    (ctx-ingest-user-message $msg)
+                     (ctx-ingest-user-message $msg)
                     _))
               
             ($_ (if (and (== (useFrames) True) (not (ctx-has-active-goals)))
                      (ctx-maintain-frame) _))
 
              ($_ (if (and (> $k 1) $msgnew)
-                    (progn 
-                        (change-state! &loops (maxNewInputLoops))
-                        (if (and (== (useFrames) True) (== (get-state &cfv2-root-mode) Slow)) (switch-mode) _))
+                     (change-state! &loops (maxNewInputLoops)) ;; )
                     _))
 
              ; Prompt is now frame-based.
@@ -118,7 +116,7 @@
                            ; (HUMAN-MSG: $msg) 
                            )
                            (if (and (spamShield) (== (useFrames) True))
-                               "NO_NEW_INPUT. Continue only if the context frame contains an active useful goal or select relevant frame from the active space DO NOT RE-SEND OR SPAM!"
+                               "NO_NEW_INPUT. Continue only if the context frame contains an active useful goal or select relevant frame from the active space. If no active frame is relevant, consider switching your mode pursuing frames registered with mode = Slow. DO NOT RE-SEND OR SPAM!"
                                "DO NOT RE-SEND OR SPAM!")))
                     ($_ (change-state! &nextWakeAt (+ (get_time) (wakeupInterval))))
                     ($_ (println! $lastmessage))
