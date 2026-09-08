@@ -1,8 +1,10 @@
 import base64
 import hashlib
 import threading
+import time
 import logging
 import sys
+from contextlib import contextmanager
 from text_splitter import split_for_telegram
 from speech_text import prepare_speech
 
@@ -344,6 +346,44 @@ def generate_and_send(prompt):
 # Uses edge-tts (free, no API key). Voice is configurable via EDGE_TTS_VOICE.
 
 DEFAULT_TTS_VOICE = "en-US-AriaNeural"
+RECORDING_REFRESH_SECONDS = 4
+
+
+@contextmanager
+def _recording_indicator():
+    """Refresh the recording action for this speech operation only."""
+    send_action = _live_send_chat_action
+    if send_action is None:
+        yield
+        return
+    channel = _live_channel
+    chat_id = getattr(channel, "chat_id", None)
+    stop = threading.Event()
+
+    def refresh():
+        # Do not move a pending recording indicator to another conversation.
+        if channel is not None and getattr(channel, "chat_id", None) != chat_id:
+            return
+        try:
+            send_action("record_voice")
+        except Exception as exc:
+            logger.warning(f"Could not send record_voice chat action: {exc}")
+
+    def run():
+        next_refresh = started + RECORDING_REFRESH_SECONDS
+        while not stop.wait(max(0, next_refresh - time.monotonic())):
+            next_refresh = time.monotonic() + RECORDING_REFRESH_SECONDS
+            refresh()
+
+    started = time.monotonic()
+    refresh()
+    worker = threading.Thread(target=run, name="telegram-recording", daemon=True)
+    worker.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        worker.join()
 
 
 def _tts_allowed():
@@ -396,24 +436,20 @@ def speak(text=""):
     text = prepare_speech(text)
     if not text:
         return "VOICE_INVALID_INPUT: no speakable text after cleanup; ask for text instead of retrying"
-    if _live_send_chat_action is not None:
-        try:
-            _live_send_chat_action("record_voice")
-        except Exception as e:
-            logger.warning(f"Could not send record_voice chat action: {e}")
     voice = config_get_by_key("EDGE_TTS_VOICE", DEFAULT_TTS_VOICE)
     if _live_send_voice is None:
         return "VOICE_FAILED: no channel is registered to send it"
     pieces = split_for_telegram(text)
-    for index, piece in enumerate(pieces):
-        audio_bytes = _synthesise_speech(piece, voice)
-        if not audio_bytes:
-            return (f"VOICE_FAILED: could not synthesise part {index + 1}/{len(pieces)}; "
-                    f"{index} parts already sent")
-        try:
-            _live_send_voice(audio_bytes)
-        except Exception as e:
-            logger.error(f"Failed to send voice message: {e}")
-            return (f"VOICE_FAILED: could not confirm delivery of part {index + 1}/{len(pieces)}; "
-                    f"{index} parts already sent: {e}")
+    with _recording_indicator():
+        for index, piece in enumerate(pieces):
+            audio_bytes = _synthesise_speech(piece, voice)
+            if not audio_bytes:
+                return (f"VOICE_FAILED: could not synthesise part {index + 1}/{len(pieces)}; "
+                        f"{index} parts already sent")
+            try:
+                _live_send_voice(audio_bytes)
+            except Exception as e:
+                logger.error(f"Failed to send voice message: {e}")
+                return (f"VOICE_FAILED: could not confirm delivery of part {index + 1}/{len(pieces)}; "
+                        f"{index} parts already sent: {e}")
     return "VOICE_SENT"

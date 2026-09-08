@@ -99,6 +99,9 @@ Speech removes Markdown formatting, URLs and emoji while keeping link labels
 and paragraph breaks. It does not change text replies. Empty input or text
 containing only removed content returns `VOICE_INVALID_INPUT` without creating
 audio. Long cleaned text is split into ordered voice messages.
+The recording indicator refreshes every four seconds during synthesis and
+upload. Refreshing stops when speech completes or fails; indicator errors do
+not prevent voice delivery.
 
 Vision defaults to Anthropic because an OpenRouter account whose data policy
 excludes vision providers gets a 404 on every vision model while text and image

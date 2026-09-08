@@ -1247,8 +1247,9 @@ def send_chat_action(action):
         _channel.loop,
     )
     try:
-        fut.result(timeout=30)
+        fut.result(timeout=3)
     except Exception as e:
+        fut.cancel()
         logging.warning(f"send_chat_action({action!r}) failed: {e}")
 
 def is_search_disabled():

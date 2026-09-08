@@ -2,6 +2,7 @@
 import json
 import sys
 import types
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -87,6 +88,47 @@ class SpeakTextTests(unittest.TestCase):
         parts = split_for_telegram("x" * 6000, lambda text: len(text) * 2 <= 4096)
         self.assertEqual("".join(parts), "x" * 6000)
         self.assertTrue(all(len(part) * 2 <= 4096 for part in parts))
+
+    def test_indicator_refreshes_during_synthesis_and_upload_then_stops(self):
+        refreshed = threading.Event()
+        actions = []
+
+        def action(value):
+            actions.append(value)
+            if len(actions) >= 2:
+                refreshed.set()
+
+        def synth(text, voice):
+            self.assertTrue(refreshed.wait(1), "indicator did not refresh during synthesis")
+            return b"audio"
+
+        def upload(audio):
+            refreshed.clear()
+            self.assertTrue(refreshed.wait(1), "indicator did not refresh during upload")
+
+        self.synth.side_effect = synth
+        self.send.side_effect = upload
+        with patch.object(mh, "_live_send_chat_action", action), patch.object(mh, "RECORDING_REFRESH_SECONDS", .01):
+            self.assertEqual(mh.speak("hello"), "VOICE_SENT")
+            refreshed.clear()
+            self.assertFalse(refreshed.wait(.05), "indicator continued after completion")
+        self.assertTrue(all(value == "record_voice" for value in actions))
+
+    def test_indicator_stops_on_failure(self):
+        for fail_synthesis in (True, False):
+            with self.subTest(synthesis=fail_synthesis):
+                action = threading.Event()
+                self.synth.side_effect = lambda *args: None if fail_synthesis else b"audio"
+                self.send.side_effect = RuntimeError("upload failed")
+                with patch.object(mh, "_live_send_chat_action", lambda value: action.set()), patch.object(mh, "RECORDING_REFRESH_SECONDS", .01):
+                    self.assertTrue(mh.speak("hello").startswith("VOICE_FAILED"))
+                    action.clear()
+                    self.assertFalse(action.wait(.05))
+
+    def test_indicator_failure_does_not_block_audio(self):
+        with patch.object(mh, "_live_send_chat_action", side_effect=RuntimeError("offline")):
+            self.assertEqual(mh.speak("hello"), "VOICE_SENT")
+        self.send.assert_called_once()
 
     def test_cleanup_before_synthesis(self):
         self.assertEqual(mh.speak("## Hello **world** 😀\nRead [the guide](https://example.com/a)."), "VOICE_SENT")
