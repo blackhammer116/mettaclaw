@@ -1,0 +1,93 @@
+"""Run offline with unittest or pytest; speech and uploads are mocked."""
+import json
+import sys
+import types
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+PLUGIN = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PLUGIN))
+sys.path.insert(0, str(PLUGIN.parents[1] / "src"))
+import helper
+import media_handler as mh
+from text_splitter import split_for_telegram
+
+
+class SpeakTextTests(unittest.TestCase):
+    def setUp(self):
+        config = types.ModuleType("config")
+        config.config_get_by_key = lambda key, default=None: default
+        self.enterContext(patch.dict(sys.modules, {"config": config}))
+        self.enterContext(patch.object(mh, "_tts_allowed", return_value=True))
+        self.enterContext(patch.object(mh, "_prompt_is_unsafe", return_value=False))
+        self.enterContext(patch.object(mh, "_live_send_chat_action", None))
+        self.synth = self.enterContext(patch.object(
+            mh, "_synthesise_speech", side_effect=lambda text, voice: text.encode()))
+        self.send = self.enterContext(patch.object(mh, "_live_send_voice"))
+
+    def delivered(self):
+        return [call.args[0].decode() for call in self.send.call_args_list]
+
+    def test_boundary_and_long_text(self):
+        for size in (4096, 4097, 12013):
+            with self.subTest(size=size):
+                self.send.reset_mock()
+                text = "я" * size
+                self.assertEqual(mh.speak(text), "VOICE_SENT")
+                parts = self.delivered()
+                self.assertEqual("".join(parts), text)
+                self.assertTrue(all(0 < len(part) <= 4096 for part in parts))
+                self.assertEqual(len(parts), (size + 4095) // 4096)
+
+    def test_actual_and_escaped_newlines(self):
+        expected = "First\nSecond\n\nsend this as speech"
+        for text in (expected, expected.replace("\n", "\\n")):
+            self.send.reset_mock()
+            self.assertEqual(mh.speak(text), "VOICE_SENT")
+            self.assertEqual(self.delivered(), [expected])
+
+    def test_long_paragraphs_use_send_splitting(self):
+        text = "a" * 3000 + "\n\n" + "b" * 3000 + "\n" + "c" * 2000
+        self.assertEqual(mh.speak(text), "VOICE_SENT")
+        self.assertEqual(self.delivered(), split_for_telegram(text))
+        self.assertEqual(self.delivered(), ["a" * 3000, "b" * 3000, "c" * 2000])
+
+    def test_parser_to_speech(self):
+        for text in ("First\nSecond", "First\\nsend this aloud"):
+            with self.subTest(text=text), patch.object(
+                    helper, "LLM_COMMANDS", helper.LLM_COMMANDS | {"speak"}):
+                self.send.reset_mock()
+                parsed = helper.balance_parentheses("speak " + text)
+                argument = json.loads(parsed[len("((speak "):-2])
+                self.assertEqual(mh.speak(argument), "VOICE_SENT")
+                self.assertEqual(self.delivered(), [text.replace("\\n", "\n")])
+
+    def test_synthesis_failure_stops(self):
+        self.synth.side_effect = [b"first", None]
+        result = mh.speak("x" * 9000)
+        self.assertIn("part 2/3", result)
+        self.assertIn("1 parts already sent", result)
+        self.assertEqual(self.delivered(), ["first"])
+        self.assertEqual(self.synth.call_count, 2)
+
+    def test_send_failure_stops(self):
+        self.send.side_effect = [None, RuntimeError("upload failed")]
+        result = mh.speak("x" * 9000)
+        self.assertIn("could not confirm delivery of part 2/3", result)
+        self.assertEqual(self.synth.call_count, 2)
+        self.assertEqual(self.send.call_count, 2)
+
+    def test_empty_normalized_input(self):
+        self.assertEqual(mh.speak("\\n\\n"), "VOICE_FAILED: empty text")
+        self.synth.assert_not_called()
+        self.send.assert_not_called()
+
+    def test_send_rendering_budget(self):
+        parts = split_for_telegram("x" * 6000, lambda text: len(text) * 2 <= 4096)
+        self.assertEqual("".join(parts), "x" * 6000)
+        self.assertTrue(all(len(part) * 2 <= 4096 for part in parts))
+
+
+if __name__ == "__main__":
+    unittest.main()

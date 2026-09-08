@@ -16,7 +16,7 @@ outbound retry queue, and the channel auth handshake.
 | Inbound PDF | Extracted text is inlined into the message |
 | Inbound voice / audio | Whisper transcript is inlined into the message |
 | Outbound image | The agent calls `generate-image`, which generates and sends the photo |
-| Outbound voice | The agent calls `speak`, which synthesizes and sends a Telegram voice message when enabled |
+| Outbound voice | The agent calls `speak`, which sends speech in ordered voice messages when enabled; long text uses the same paragraph/line splitting as text replies |
 | Admin commands | `/kill`, `/pause [chat_id]`, `/togglesearch`, `/purge` (admin IDs only) |
 | Safety | Ethics classification on inbound and outbound text, per-user spam throttling |
 | Scope limits | `prompt.txt` is added to the agent's prompt as its own section |

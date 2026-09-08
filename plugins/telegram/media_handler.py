@@ -3,6 +3,7 @@ import hashlib
 import threading
 import logging
 import sys
+from text_splitter import split_for_telegram
 
 logger = logging.getLogger(__name__)
 
@@ -342,7 +343,6 @@ def generate_and_send(prompt):
 # Uses edge-tts (free, no API key). Voice is configurable via EDGE_TTS_VOICE.
 
 DEFAULT_TTS_VOICE = "en-US-AriaNeural"
-MAX_TTS_CHARS = 4096
 
 
 def _tts_allowed():
@@ -379,14 +379,13 @@ def _synthesise_speech(text, voice):
 
 
 def speak(text):
-    from config import config_get_by_key
     """speak skill: synthesise `text` as a voice message and send it to the
     user via Telegram sendVoice. Returns a short status string (never raises)."""
-    text = (text or "").strip()
+    from config import config_get_by_key
+    # Match send_message: decode escaped newlines before splitting.
+    text = (text or "").replace("\\n", "\n").strip()
     if not text:
         return "VOICE_FAILED: empty text"
-    if len(text) > MAX_TTS_CHARS:
-        return f"VOICE_FAILED: text exceeds {MAX_TTS_CHARS} characters"
     if not _tts_allowed():
         return "VOICE_DISABLED: voice replies are turned off"
     if _prompt_is_unsafe(text):
@@ -397,14 +396,18 @@ def speak(text):
         except Exception as e:
             logger.warning(f"Could not send record_voice chat action: {e}")
     voice = config_get_by_key("EDGE_TTS_VOICE", DEFAULT_TTS_VOICE)
-    audio_bytes = _synthesise_speech(text, voice)
-    if not audio_bytes:
-        return "VOICE_FAILED: could not synthesise speech"
     if _live_send_voice is None:
-        return "VOICE_FAILED: synthesised but no channel is registered to send it"
-    try:
-        _live_send_voice(audio_bytes)
-    except Exception as e:
-        logger.error(f"Failed to send voice message: {e}")
-        return f"VOICE_FAILED: synthesised but could not send: {e}"
+        return "VOICE_FAILED: no channel is registered to send it"
+    pieces = split_for_telegram(text)
+    for index, piece in enumerate(pieces):
+        audio_bytes = _synthesise_speech(piece, voice)
+        if not audio_bytes:
+            return (f"VOICE_FAILED: could not synthesise part {index + 1}/{len(pieces)}; "
+                    f"{index} parts already sent")
+        try:
+            _live_send_voice(audio_bytes)
+        except Exception as e:
+            logger.error(f"Failed to send voice message: {e}")
+            return (f"VOICE_FAILED: could not confirm delivery of part {index + 1}/{len(pieces)}; "
+                    f"{index} parts already sent: {e}")
     return "VOICE_SENT"
