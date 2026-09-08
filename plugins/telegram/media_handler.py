@@ -4,6 +4,7 @@ import threading
 import logging
 import sys
 from text_splitter import split_for_telegram
+from speech_text import prepare_speech
 
 logger = logging.getLogger(__name__)
 
@@ -378,18 +379,23 @@ def _synthesise_speech(text, voice):
         return None
 
 
-def speak(text):
+def speak(text=""):
     """speak skill: synthesise `text` as a voice message and send it to the
     user via Telegram sendVoice. Returns a short status string (never raises)."""
     from config import config_get_by_key
     # Match send_message: decode escaped newlines before splitting.
-    text = (text or "").replace("\\n", "\n").strip()
+    if not isinstance(text, str):
+        return "VOICE_INVALID_INPUT: provide text to speak; do not retry unchanged input"
+    text = text.replace("\\n", "\n").strip()
     if not text:
-        return "VOICE_FAILED: empty text"
+        return "VOICE_INVALID_INPUT: empty text; ask for text instead of retrying"
     if not _tts_allowed():
         return "VOICE_DISABLED: voice replies are turned off"
     if _prompt_is_unsafe(text):
         return "Refused: unsafe voice content"
+    text = prepare_speech(text)
+    if not text:
+        return "VOICE_INVALID_INPUT: no speakable text after cleanup; ask for text instead of retrying"
     if _live_send_chat_action is not None:
         try:
             _live_send_chat_action("record_voice")

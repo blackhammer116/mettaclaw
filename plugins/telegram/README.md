@@ -79,7 +79,7 @@ they belong to the proxy, not here.
 | `ANTHROPIC_API_KEY` | for vision | Used by the default vision provider |
 | `OPENROUTER_API_KEY` | for image gen + Whisper | Also the vision key if `VISION_PROVIDER=OpenRouter` |
 | `OPENAI_API_KEY` | for safety checks | Moderation API; without it the ethics passes allow content through |
-| `EDGE_TTS_VOICE` | no | Voice for the `speak` skill; any voice from `edge-tts --list-voices`, defaults to `en-US-AriaNeural` |
+| `EDGE_TTS_VOICE` | no | Speech voice; also accepts `OMEGA_EDGE_TTS_VOICE`. Defaults to `en-US-AriaNeural`; choose a voice for the language being spoken using `edge-tts --list-voices` |
 | `VISION_PROVIDER` | no | `Anthropic` (default) or `OpenRouter` |
 | `VISION_MODEL` | no | Overrides the provider's default vision model |
 | `IMAGE_PROVIDER` | no | `OpenRouter` (default, FLUX) or `OpenAI` |
@@ -87,6 +87,18 @@ they belong to the proxy, not here.
 | `TG_PROFILE_PATH` | no | Path to the channel profile, defaults to the shipped one |
 | `TG_POLICY_PATH` | no | Path to the user-facing policy text, defaults to the shipped one |
 | `TG_PROMPT_PATH` | no | Path to the prompt section, defaults to the shipped one |
+
+Voice precedence is runtime `EDGE_TTS_VOICE=...`, then environment
+`OMEGA_EDGE_TTS_VOICE`, then environment `EDGE_TTS_VOICE`, then the
+`EDGE_TTS_VOICE` YAML setting. Empty environment values are ignored.
+Both environment names survive the container entrypoint. `scripts/omega`
+forwards the voice from its environment; staging/production deployments read
+the GitHub Actions variable `EDGE_TTS_VOICE`. Restart after changing the voice.
+
+Speech removes Markdown formatting, URLs and emoji while keeping link labels
+and paragraph breaks. It does not change text replies. Empty input or text
+containing only removed content returns `VOICE_INVALID_INPUT` without creating
+audio. Long cleaned text is split into ordered voice messages.
 
 Vision defaults to Anthropic because an OpenRouter account whose data policy
 excludes vision providers gets a 404 on every vision model while text and image

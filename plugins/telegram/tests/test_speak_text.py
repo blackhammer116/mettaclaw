@@ -79,7 +79,7 @@ class SpeakTextTests(unittest.TestCase):
         self.assertEqual(self.send.call_count, 2)
 
     def test_empty_normalized_input(self):
-        self.assertEqual(mh.speak("\\n\\n"), "VOICE_FAILED: empty text")
+        self.assertTrue(mh.speak("\\n\\n").startswith("VOICE_INVALID_INPUT"))
         self.synth.assert_not_called()
         self.send.assert_not_called()
 
@@ -87,6 +87,27 @@ class SpeakTextTests(unittest.TestCase):
         parts = split_for_telegram("x" * 6000, lambda text: len(text) * 2 <= 4096)
         self.assertEqual("".join(parts), "x" * 6000)
         self.assertTrue(all(len(part) * 2 <= 4096 for part in parts))
+
+    def test_cleanup_before_synthesis(self):
+        self.assertEqual(mh.speak("## Hello **world** 😀\nRead [the guide](https://example.com/a)."), "VOICE_SENT")
+        self.assertEqual(self.delivered(), ["Hello world\nRead the guide."])
+
+    def test_empty_and_removed_content_never_send(self):
+        for text in (None, [], "", " ", "😀", "***", "https://example.com", "[https://example.com](https://example.com)"):
+            with self.subTest(text=text):
+                self.assertTrue(mh.speak(text).startswith("VOICE_INVALID_INPUT"))
+        self.assertTrue(mh.speak().startswith("VOICE_INVALID_INPUT"))
+        self.synth.assert_not_called()
+        self.send.assert_not_called()
+
+    def test_missing_argument_parses_to_validation(self):
+        with patch.object(helper, "LLM_COMMANDS", helper.LLM_COMMANDS | {"speak"}):
+            for command in ("speak", "(speak)", 'speak ""'):
+                self.assertEqual(helper.balance_parentheses(command), '((speak ""))')
+
+    def test_cleanup_preserves_language_and_numbers(self):
+        self.assertEqual(mh.speak("Привет **мир**! 123 _слова_ `code` 👩‍💻"), "VOICE_SENT")
+        self.assertEqual(self.delivered(), ["Привет мир! 123 слова code"])
 
 
 if __name__ == "__main__":

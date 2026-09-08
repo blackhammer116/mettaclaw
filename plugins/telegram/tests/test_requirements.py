@@ -19,6 +19,7 @@ _REQUIREMENTS = os.path.join(_PLUGIN_DIR, "requirements.txt")
 _DISTRIBUTION = {
     "PIL": "Pillow",
     "yaml": "PyYAML",
+    "edge_tts": "edge-tts",
     "telegramify_markdown": "telegramify-markdown",
 }
 

@@ -51,5 +51,8 @@
 (= (generate-image $prompt)
    (py-call (media_handler.generate_and_send $prompt)))
 
+(= (speak)
+   (speak ""))
+
 (= (speak $text)
    (py-call (media_handler.speak $text)))
