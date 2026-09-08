@@ -23,6 +23,9 @@ class SpeakTextTests(unittest.TestCase):
         self.enterContext(patch.object(mh, "_tts_allowed", return_value=True))
         self.enterContext(patch.object(mh, "_prompt_is_unsafe", return_value=False))
         self.enterContext(patch.object(mh, "_live_send_chat_action", None))
+        # These tests isolate text cleanup/chunking from language routing.
+        self.enterContext(patch.object(mh, "speech_parts", side_effect=lambda text, voice:
+                                      [(piece, voice) for piece in split_for_telegram(text)]))
         self.synth = self.enterContext(patch.object(
             mh, "_synthesise_speech", side_effect=lambda text, voice: text.encode()))
         self.send = self.enterContext(patch.object(mh, "_live_send_voice"))

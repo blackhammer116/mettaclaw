@@ -20,6 +20,7 @@ _DISTRIBUTION = {
     "PIL": "Pillow",
     "yaml": "PyYAML",
     "edge_tts": "edge-tts",
+    "lingua": "lingua-language-detector",
     "telegramify_markdown": "telegramify-markdown",
 }
 

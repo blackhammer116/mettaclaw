@@ -79,7 +79,7 @@ they belong to the proxy, not here.
 | `ANTHROPIC_API_KEY` | for vision | Used by the default vision provider |
 | `OPENROUTER_API_KEY` | for image gen + Whisper | Also the vision key if `VISION_PROVIDER=OpenRouter` |
 | `OPENAI_API_KEY` | for safety checks | Moderation API; without it the ethics passes allow content through |
-| `EDGE_TTS_VOICE` | no | Speech voice; also accepts `OMEGA_EDGE_TTS_VOICE`. Defaults to `en-US-AriaNeural`; choose a voice for the language being spoken using `edge-tts --list-voices` |
+| `EDGE_TTS_VOICE` | no | Preferred/fallback speech voice; also accepts `OMEGA_EDGE_TTS_VOICE`. Defaults to `en-US-AriaNeural`. Other detected languages automatically use a matching voice. |
 | `VISION_PROVIDER` | no | `Anthropic` (default) or `OpenRouter` |
 | `VISION_MODEL` | no | Overrides the provider's default vision model |
 | `IMAGE_PROVIDER` | no | `OpenRouter` (default, FLUX) or `OpenAI` |
@@ -94,6 +94,25 @@ Voice precedence is runtime `EDGE_TTS_VOICE=...`, then environment
 Both environment names survive the container entrypoint. `scripts/omega`
 forwards the voice from its environment; staging/production deployments read
 the GitHub Actions variable `EDGE_TTS_VOICE`. Restart after changing the voice.
+
+Speech language routing is automatic; no language-mode setting is required.
+The local Lingua detector examines the cleaned speech text sentence by sentence
+and line by line. English uses the default English voice; an explicitly
+configured voice is retained whenever its language matches the detected text.
+Other languages use a matching voice from the Edge TTS catalogue (Russian
+prefers `ru-RU-SvetlanaNeural`). The catalogue is fetched only when switching
+languages and cached after a successful request. Detection itself is offline;
+voice discovery and synthesis require network access.
+
+Mixed-language sentences/lines are delivered in order, merging adjacent pieces
+that use the same voice before applying the usual 4096-character splitting.
+Language changes *within* a sentence use its dominant detected language, not
+word-by-word switching. Short or uncertain text falls back to the configured
+voice; detection is heuristic and does not guarantee every language or phrase.
+A confidently detected language without an available voice, or a failed voice
+catalogue request, returns `VOICE_FAILED` without synthesising the request.
+Install the plugin requirements to include `lingua-language-detector`; its
+models load lazily and add memory usage on the first speech request.
 
 Speech removes Markdown formatting, URLs and emoji while keeping link labels
 and paragraph breaks. It does not change text replies. Empty input or text

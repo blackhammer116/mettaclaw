@@ -5,8 +5,8 @@ import time
 import logging
 import sys
 from contextlib import contextmanager
-from text_splitter import split_for_telegram
 from speech_text import prepare_speech
+from speech_language import speech_parts
 
 logger = logging.getLogger(__name__)
 
@@ -439,9 +439,13 @@ def speak(text=""):
     voice = config_get_by_key("EDGE_TTS_VOICE", DEFAULT_TTS_VOICE)
     if _live_send_voice is None:
         return "VOICE_FAILED: no channel is registered to send it"
-    pieces = split_for_telegram(text)
     with _recording_indicator():
-        for index, piece in enumerate(pieces):
+        try:
+            pieces = speech_parts(text, voice)
+        except Exception as exc:
+            logger.exception("Could not select speech voices")
+            return f"VOICE_FAILED: could not select a language-compatible voice: {exc}"
+        for index, (piece, voice) in enumerate(pieces):
             audio_bytes = _synthesise_speech(piece, voice)
             if not audio_bytes:
                 return (f"VOICE_FAILED: could not synthesise part {index + 1}/{len(pieces)}; "
