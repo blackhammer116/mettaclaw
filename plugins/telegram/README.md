@@ -98,19 +98,25 @@ the GitHub Actions variable `EDGE_TTS_VOICE`. Restart after changing the voice.
 Speech language routing is automatic; no language-mode setting is required.
 The local Lingua detector examines the cleaned speech text sentence by sentence
 and line by line. English uses the default English voice; an explicitly
-configured voice is retained whenever its language matches the detected text.
-Other languages use a matching voice from the Edge TTS catalogue (Russian
-prefers `ru-RU-SvetlanaNeural`). The catalogue is fetched only when switching
-languages and cached after a successful request. Detection itself is offline;
+configured voice is retained whenever its language matches the detected text,
+regardless of gender. The existing configuration precedence is unchanged.
+Other languages use a voice matching the configured voice's gender, as reported
+by the Edge TTS catalogue: a male default selects male voices and a female
+default selects female voices. Russian prefers `ru-RU-SvetlanaNeural` for a
+female default. Returning to the configured language restores the exact
+configured voice. The catalogue is fetched
+only when switching languages and cached after a successful request. Detection itself is offline;
 voice discovery and synthesis require network access.
 
 Mixed-language sentences/lines are delivered in order, merging adjacent pieces
 that use the same voice before applying the usual 4096-character splitting.
 Language changes *within* a sentence use its dominant detected language, not
-word-by-word switching. Short or uncertain text falls back to the configured
-voice; detection is heuristic and does not guarantee every language or phrase.
-A confidently detected language without an available voice, or a failed voice
-catalogue request, returns `VOICE_FAILED` without synthesising the request.
+word-by-word switching. Short or uncertain text retains the configured voice
+regardless of gender; detection is heuristic and does
+not guarantee every language or phrase.
+An automatic switch without a voice of the matching gender, an unknown gender
+for the configured voice, or a failed catalogue request returns `VOICE_FAILED`
+without synthesising the request. It never silently switches gender.
 Install the plugin requirements to include `lingua-language-detector`; its
 models load lazily and add memory usage on the first speech request.
 

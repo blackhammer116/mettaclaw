@@ -11,11 +11,15 @@ import speech_language as sl
 import media_handler as mh
 
 VOICES = [
-    {"Locale": "en-US", "ShortName": sl.DEFAULT_VOICE},
-    {"Locale": "ru-RU", "ShortName": "ru-RU-DmitryNeural"},
-    {"Locale": "ru-RU", "ShortName": "ru-RU-SvetlanaNeural"},
-    {"Locale": "uk-UA", "ShortName": "uk-UA-PolinaNeural"},
-    {"Locale": "fr-FR", "ShortName": "fr-FR-DeniseNeural"},
+    {"Locale": "en-US", "ShortName": sl.DEFAULT_VOICE, "Gender": "Female"},
+    {"Locale": "en-US", "ShortName": "en-US-GuyNeural", "Gender": "Male"},
+    {"Locale": "en-GB", "ShortName": "en-GB-SoniaNeural", "Gender": "Female"},
+    {"Locale": "nb-NO", "ShortName": "nb-NO-PernilleNeural", "Gender": "Female"},
+    {"Locale": "ru-RU", "ShortName": "ru-RU-DmitryNeural", "Gender": "Male"},
+    {"Locale": "ru-RU", "ShortName": "ru-RU-SvetlanaNeural", "Gender": "Female"},
+    {"Locale": "uk-UA", "ShortName": "uk-UA-PolinaNeural", "Gender": "Female"},
+    {"Locale": "fr-FR", "ShortName": "fr-FR-DeniseNeural", "Gender": "Female"},
+    {"Locale": "fr-FR", "ShortName": "fr-FR-AlainNeural", "Gender": "Male"},
 ]
 RUSSIAN = "Это проверка русского голоса. Пожалуйста, прочитайте весь текст вслух."
 
@@ -41,7 +45,7 @@ class SpeechLanguageTests(unittest.TestCase):
 
     def test_matching_configured_voice_and_uncertainty_need_no_catalogue(self):
         for language, voice in [("en", "en-GB-SoniaNeural"),
-                                ("ru", "ru-RU-DmitryNeural"),
+                                ("ru", "ru-RU-SvetlanaNeural"),
                                 (None, "en-US-AriaNeural"),
                                 ("no", "nb-NO-PernilleNeural")]:
             self.assertEqual(sl.select_voice(language, voice), voice)
@@ -49,16 +53,53 @@ class SpeechLanguageTests(unittest.TestCase):
 
     def test_russian_selection_and_return_to_english(self):
         self.assertEqual(sl.select_voice("ru", sl.DEFAULT_VOICE), "ru-RU-SvetlanaNeural")
-        self.assertEqual(sl.select_voice("en", "ru-RU-DmitryNeural"), sl.DEFAULT_VOICE)
+        self.assertEqual(sl.select_voice("en", "ru-RU-DmitryNeural"), "en-US-GuyNeural")
 
     def test_unsupported_language_fails(self):
-        with self.assertRaisesRegex(ValueError, "No speech voice"):
+        with self.assertRaisesRegex(ValueError, "No female speech voice"):
             sl.select_voice("xx", sl.DEFAULT_VOICE)
 
     def test_uncertain_short_text_uses_configured_voice(self):
         self.assertEqual(sl.speech_parts("OK", "en-GB-SoniaNeural"),
                          [("OK", "en-GB-SoniaNeural")])
         self.catalogue.assert_not_called()
+
+    def test_alphabetically_first_male_voice_is_skipped(self):
+        self.assertEqual(sl.select_voice("fr", sl.DEFAULT_VOICE), "fr-FR-DeniseNeural")
+
+    def test_configured_male_voice_is_preserved_for_matching_or_uncertain_text(self):
+        for language in ("ru", None):
+            self.assertEqual(sl.select_voice(language, "ru-RU-DmitryNeural"),
+                             "ru-RU-DmitryNeural")
+        self.catalogue.assert_not_called()
+
+    def test_missing_or_male_gender_is_not_a_fallback(self):
+        for gender in ("Male", None):
+            self.catalogue.return_value = [
+                VOICES[0],
+                {"Locale": "ru-RU", "ShortName": "ru-RU-SvetlanaNeural", "Gender": gender}]
+            with self.assertRaisesRegex(ValueError, "No female speech voice"):
+                sl.select_voice("ru", sl.DEFAULT_VOICE)
+
+    def test_dynamic_switch_then_return_to_configured_male_voice(self):
+        text = "Hello, this is an English sentence.\n" + RUSSIAN + "\nHello, this is an English sentence."
+        parts = sl.speech_parts(text, "en-US-GuyNeural")
+        self.assertEqual([voice for _, voice in parts],
+                         ["en-US-GuyNeural", "ru-RU-DmitryNeural", "en-US-GuyNeural"])
+
+    def test_male_configuration_does_not_fall_back_to_female(self):
+        with self.assertRaisesRegex(ValueError, "No male speech voice"):
+            sl.select_voice("uk", "en-US-GuyNeural")
+
+    def test_unknown_configured_gender_fails_on_language_switch(self):
+        for configured in ("en-US-UnknownNeural", sl.DEFAULT_VOICE):
+            with self.subTest(configured=configured):
+                self.catalogue.return_value = [
+                    {"Locale": "en-US", "ShortName": sl.DEFAULT_VOICE},
+                    VOICES[4],
+                ]
+                with self.assertRaisesRegex(ValueError, "Cannot determine gender"):
+                    sl.select_voice("ru", configured)
 
     def test_mixed_lines_keep_order(self):
         text = "Hello, this is an English sentence.\n" + RUSSIAN + "\nHello, this is an English sentence."

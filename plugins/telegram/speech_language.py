@@ -54,15 +54,23 @@ def available_voices():
 
 
 def select_voice(language, configured_voice):
+    # Keep the configured voice for its own language and uncertain text.
     if language is None or _language(language) == _language(configured_voice):
         return configured_voice
+    language = _language(language)
+    voices = available_voices()
+    gender = next((voice.get("Gender") for voice in voices
+                   if voice.get("ShortName") == configured_voice), None)
+    if gender not in ("Female", "Male"):
+        raise ValueError(f"Cannot determine gender of configured voice {configured_voice}")
     candidates = sorted(
-        voice["ShortName"] for voice in available_voices()
+        voice["ShortName"] for voice in voices
         if _language(voice.get("Locale", "")) == _language(language)
         and voice.get("ShortName")
+        and voice.get("Gender") == gender
     )
     if not candidates:
-        raise ValueError(f"No speech voice available for detected language {language}")
+        raise ValueError(f"No {gender.lower()} speech voice available for language {language}")
     preferred = PREFERRED_VOICES.get(language)
     return preferred if preferred in candidates else candidates[0]
 
