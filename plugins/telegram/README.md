@@ -124,8 +124,12 @@ switches gender.
 Install the plugin requirements to include `lingua-language-detector`; its
 models load lazily and add memory usage on the first speech request.
 
-Speech removes Markdown formatting, URLs and emoji while keeping link labels
-and paragraph breaks. It does not change text replies. Empty input or text
+Speech uses the Pyromark parser to remove Markdown formatting and image
+descriptions while retaining link labels (including reference links), code
+contents, and paragraph breaks. URLs and emoji are removed as a separate
+speech-only cleanup step. Install the updated plugin requirements or rebuild
+the Docker image to include `pyromark`.
+This does not change text replies. Empty input or text
 containing only removed content returns `VOICE_INVALID_INPUT` without creating
 audio. Long cleaned text is split into ordered voice messages.
 The recording indicator refreshes every four seconds during synthesis and
