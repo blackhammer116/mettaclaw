@@ -70,7 +70,11 @@ def select_voice(language, configured_voice):
         and voice.get("Gender") == gender
     )
     if not candidates:
-        raise ValueError(f"No {gender.lower()} speech voice available for language {language}")
+        logger.warning(
+            "No %s speech voice for detected language %s; using configured voice %s",
+            gender.lower(), language, configured_voice,
+        )
+        return configured_voice
     preferred = PREFERRED_VOICES.get(language)
     return preferred if preferred in candidates else candidates[0]
 

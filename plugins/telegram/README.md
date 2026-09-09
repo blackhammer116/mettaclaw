@@ -114,9 +114,13 @@ Language changes *within* a sentence use its dominant detected language, not
 word-by-word switching. Short or uncertain text retains the configured voice
 regardless of gender; detection is heuristic and does
 not guarantee every language or phrase.
-An automatic switch without a voice of the matching gender, an unknown gender
-for the configured voice, or a failed catalogue request returns `VOICE_FAILED`
-without synthesising the request. It never silently switches gender.
+If a detected language has no voice of the configured gender, that segment
+falls back to the configured voice and logs a warning; other segments continue
+their normal routing. This contains unsupported-language misdetections without
+discarding the whole reply, though fallback pronunciation may be imperfect.
+An unknown gender for the configured voice or a failed catalogue request still
+returns `VOICE_FAILED` without synthesising the request. It never silently
+switches gender.
 Install the plugin requirements to include `lingua-language-detector`; its
 models load lazily and add memory usage on the first speech request.
 

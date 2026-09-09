@@ -55,9 +55,10 @@ class SpeechLanguageTests(unittest.TestCase):
         self.assertEqual(sl.select_voice("ru", sl.DEFAULT_VOICE), "ru-RU-SvetlanaNeural")
         self.assertEqual(sl.select_voice("en", "ru-RU-DmitryNeural"), "en-US-GuyNeural")
 
-    def test_unsupported_language_fails(self):
-        with self.assertRaisesRegex(ValueError, "No female speech voice"):
-            sl.select_voice("xx", sl.DEFAULT_VOICE)
+    def test_unsupported_language_falls_back_with_warning(self):
+        with self.assertLogs(sl.logger, level="WARNING") as logs:
+            self.assertEqual(sl.select_voice("la", sl.DEFAULT_VOICE), sl.DEFAULT_VOICE)
+        self.assertIn("detected language la", logs.output[0])
 
     def test_uncertain_short_text_uses_configured_voice(self):
         self.assertEqual(sl.speech_parts("OK", "en-GB-SoniaNeural"),
@@ -78,8 +79,7 @@ class SpeechLanguageTests(unittest.TestCase):
             self.catalogue.return_value = [
                 VOICES[0],
                 {"Locale": "ru-RU", "ShortName": "ru-RU-SvetlanaNeural", "Gender": gender}]
-            with self.assertRaisesRegex(ValueError, "No female speech voice"):
-                sl.select_voice("ru", sl.DEFAULT_VOICE)
+            self.assertEqual(sl.select_voice("ru", sl.DEFAULT_VOICE), sl.DEFAULT_VOICE)
 
     def test_dynamic_switch_then_return_to_configured_male_voice(self):
         text = "Hello, this is an English sentence.\n" + RUSSIAN + "\nHello, this is an English sentence."
@@ -88,8 +88,25 @@ class SpeechLanguageTests(unittest.TestCase):
                          ["en-US-GuyNeural", "ru-RU-DmitryNeural", "en-US-GuyNeural"])
 
     def test_male_configuration_does_not_fall_back_to_female(self):
-        with self.assertRaisesRegex(ValueError, "No male speech voice"):
-            sl.select_voice("uk", "en-US-GuyNeural")
+        self.assertEqual(sl.select_voice("uk", "en-US-GuyNeural"), "en-US-GuyNeural")
+
+    def test_misdetected_line_does_not_cancel_speech(self):
+        text = "Hello, this is an English sentence.\nOmega Claw v2\nПривет, мир!\nThis is the final English sentence."
+        config = types.ModuleType("config")
+        config.config_get_by_key = lambda key, default=None: default
+        # Force the reported misclassification; do not depend on detector scores.
+        with patch.object(sl, "detect_language", side_effect=["en", "la", "ru", "en"]), \
+                patch.dict(sys.modules, {"config": config}), \
+                patch.object(mh, "_tts_allowed", return_value=True), \
+                patch.object(mh, "_prompt_is_unsafe", return_value=False), \
+                patch.object(mh, "_live_send_chat_action", None), \
+                patch.object(mh, "_synthesise_speech", return_value=b"audio") as synth, \
+                patch.object(mh, "_live_send_voice") as send:
+            self.assertEqual(mh.speak(text), "VOICE_SENT")
+            self.assertEqual([call.args[1] for call in synth.call_args_list],
+                             [sl.DEFAULT_VOICE, "ru-RU-SvetlanaNeural", sl.DEFAULT_VOICE])
+            self.assertEqual("\n".join(call.args[0].strip() for call in synth.call_args_list), text)
+            self.assertEqual(send.call_count, 3)
 
     def test_unknown_configured_gender_fails_on_language_switch(self):
         for configured in ("en-US-UnknownNeural", sl.DEFAULT_VOICE):

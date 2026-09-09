@@ -23,7 +23,7 @@ def search(query, max_results=10):
     try:
         ret = "("
         for r in search_(query):
-            ret += "(TITLE: " + r["title"] + "URL: " + r["url"] + " SNIPPET: " + r["snippet"] + ") "
+            ret += "(TITLE: " + r["title"] + " SNIPPET: " + r["snippet"] + ") "
         ret += ")"
         return ret
     except Exception as e:
