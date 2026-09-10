@@ -165,6 +165,21 @@ jobs:
             --core-remote "${{ steps.core.outputs.remote }}" \
             --core-ref "${{ steps.core.outputs.sha }}"
 
+      - name: Make room for the image
+        # A stock runner has about 14GB free, and this image does not fit in it
+        # twice: buildx keeps the layers, and `load` below writes the whole
+        # image into the daemon again so the smoke test can run before anything
+        # is published. Deleting toolchains this build never touches buys back
+        # roughly 25GB. Without it the build reaches the final layer and dies on
+        # "no space left on device".
+        run: |
+          echo "before:"; df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost /opt/hostedtoolcache/CodeQL \
+                      /usr/local/share/powershell /usr/share/swift || true
+          sudo docker image prune --all --force >/dev/null 2>&1 || true
+          echo "after:"; df -h / | tail -1
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
