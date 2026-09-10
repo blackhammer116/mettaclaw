@@ -1,0 +1,49 @@
+name: Deploy (production)
+
+# Tag a commit on the bot branch to release it:
+#
+#   git tag prod-2026-09-10 && git push origin prod-2026-09-10
+#
+# A tag push reads the workflow from the tagged commit, so this works without
+# the workflow ever being on the default branch.
+
+on:
+  push:
+    tags:
+      - "prod-*"
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    uses: ./.github/workflows/common.yml
+    with:
+      publish_docker: true
+      tag_name: production-${{ github.sha }}
+      core_remote: ${{ vars.CORE_REMOTE }}
+      core_ref: ${{ vars.CORE_REF }}
+    secrets:
+      REGISTRY_USERNAME: ${{ github.actor }}
+      REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+
+  deploy:
+    needs: build
+    uses: ./.github/workflows/deploy.yml
+    with:
+      image: ${{ needs.build.outputs.image }}
+      target: production
+      env_slug: prod
+      restart: true
+    secrets:
+      INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID_PRODUCTION }}
+      INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET_PRODUCTION }}
+      INFISICAL_PROJECT_SLUG: ${{ secrets.INFISICAL_PROJECT_SLUG }}
+      SSH_HOST: ${{ secrets.SSH_HOST_PRODUCTION }}
+      SSH_USER: ${{ secrets.SSH_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}

@@ -95,7 +95,6 @@ stock one — not privileges.
 | `telegram/` | `plugins/telegram` | The plugin: channel, media handling, vision, config |
 | `plugins.yaml` | `config/plugins.yaml` | Core's plugin list plus this plugin's entry |
 | `skills.metta` | `src/skills.metta` | Core's skills plus `describe-image` and `generate-image` |
-| `knowledge-priors/` | `knowledge-priors` | Shared knowledge base, inherited from `main` |
 | `Dockerfile` | — | Adds the plugin's Python dependencies to the core image |
 | `Omega_Telegram_SNET` | — | Builds and runs the bot |
 
@@ -103,10 +102,6 @@ stock one — not privileges.
 `loadOmegaPlugin` cannot currently register skills that reach `getSkills`.
 Once that is fixed upstream they can move into the plugin and this file no
 longer needs mounting.
-
-`knowledge-priors/` comes from the `main` branch — merge `main` into this branch
-to pick up updates. Core discovers it automatically: `src/rag.py` reads
-`<repo root>/knowledge-priors/*.md`, and skips the step if the folder is absent.
 
 ## Configuration
 
@@ -131,11 +126,119 @@ generation keep working on the same key.
 ## Tests
 
 ```sh
-cd telegram && for f in tests/test_*.py; do python3 "$f"; done
+pip install pytest -r telegram/requirements.txt
+pytest telegram/tests -q
 ```
 
-Plain asserts, no framework. Network and Telegram calls are stubbed, so no
-credentials are needed.
+Network and Telegram calls are stubbed, so no credentials are needed. The live
+suite in `telegram/tests/test_e2e.py` skips itself unless `TG_E2E=1` is set; it
+talks to a real bot, so give it an idle token rather than the one a running bot
+is polling with.
+
+To run the suite against the real core inside a built image:
+
+```sh
+./run-plugin --test
+```
+
+## Continuous delivery
+
+Five workflows in `.github/workflows/`, all living on this branch only:
+
+| Trigger | Workflow | What happens |
+| --- | --- | --- |
+| pull request | `ci.yml` | test, build, smoke test; publishes nothing |
+| push to `SNET_Telegram` | `deploy-staging.yml` | the same, then push the image and deploy to staging |
+| push a `prod-*` tag | `deploy-production.yml` | the same against production, with `--restart=always` |
+
+All three call `common.yml`, where the image is assembled, and the two deploys
+call `deploy.yml`, where the server work lives. Staging and production differ
+only in which Infisical environment the secrets come from and whether the
+container restarts on its own, so they share one deploy definition.
+
+### How the image is built
+
+`common.yml` runs the same script you would run locally:
+
+```sh
+./run-plugin --prepare-only --core-remote <remote> --core-ref <commit>
+```
+
+Core is cloned at a commit, copied, and the copy is what receives the plugin at
+`plugins/telegram`. Core itself is never edited, so nothing on this branch has
+to land upstream for the image to exist.
+
+Core defaults to the `telegram` branch of `iCog-Labs-Dev/mettaclaw`, which
+already carries everything the plugin needs, so nothing is patched. Against a
+core that does not — `singnet/Omega` today — the script adds the manifest entry,
+the plugin requirements install, the `/telegram-file/` proxy route, and removes
+the channel file that claims the same id. Point it at a different core with the
+`CORE_REMOTE` or `CORE_REF` repository variable; no workflow edit.
+
+A branch is resolved to a commit when the run starts, so a push to core
+mid-build cannot change what is built, and every run summary records the core
+commit its image came from.
+
+Images go to `ghcr.io/singnet/omega-telegram-snet`, tagged `staging-<sha>` or
+`production-<sha>` after the plugin's own commit.
+
+### What has to pass before an image is published
+
+The plugin's test suite, on the runner. Then the built image is asked to load
+the plugin the way core will: read the manifest through core's own loader, and
+import every module. The suite cannot catch a missing dependency on its own,
+because it stubs core out and runs against whatever the runner has installed —
+only the image can, and a missing dependency is this plugin's most likely way
+to break a deployment.
+
+### One-time setup
+
+Nothing in Infisical changes: the same machine identities, the same project, the
+same `staging` and `prod` environments, and the same key names (`ASI_API_KEY`,
+`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `BOT_TOKEN`,
+`CHAT_ID`) this bot already reads.
+
+What this repository needs is the login to that vault and SSH access to the two
+servers, as nine repository secrets:
+
+| Secret | |
+| --- | --- |
+| `INFISICAL_PROJECT_SLUG` | the project holding the keys, shared |
+| `INFISICAL_CLIENT_ID_STAGING` | the staging machine identity |
+| `INFISICAL_CLIENT_SECRET_STAGING` | |
+| `INFISICAL_CLIENT_ID_PRODUCTION` | the production machine identity |
+| `INFISICAL_CLIENT_SECRET_PRODUCTION` | |
+| `SSH_HOST_STAGING` | staging server |
+| `SSH_HOST_PRODUCTION` | production server |
+| `SSH_USER` | shared by both |
+| `SSH_PRIVATE_KEY` | shared by both |
+
+Staging and production log in to Infisical as different identities, so their
+credentials cannot share a name. Each deploy workflow passes its own pair into
+`deploy.yml`, which reads them under one name — so the deploy logic stays
+single-copy while the credentials stay separate.
+
+`./push-cicd-secrets` sets all nine from a filled `.env.cicd`, validating first
+and printing no value. Setting secrets needs admin on the repository. GitHub
+environments are deliberately not used: the protection rules that would justify
+them also need admin, and without them an environment adds nothing here. To add
+approval gates later, put `environment: staging` back on the job in
+`deploy.yml`.
+
+Everything else has a default: `LLM_PROVIDER` (`OpenRouter`), `LLM_MODEL`
+(core's own default when unset), `CORE_REMOTE` and `CORE_REF`. Set any of them
+as a repository variable to override.
+
+### It replaces the pipeline on core's telegram branch
+
+The deploy is the same in every respect that touches the server: the same host,
+the same `/omega/.env`, the same `/Backup/docker/PeTTa` memory mount, and the
+same container name `omega`, which it removes and recreates. That is deliberate.
+The Infisical `BOT_TOKEN` names one bot, and Telegram hands each update to one
+poller, so two containers on that token would each see half the messages.
+
+Disable `deploy-staging.yml` and `deploy-production.yml` on core's `telegram`
+branch before the first push here, or whichever pipeline runs last wins.
 
 ---
 

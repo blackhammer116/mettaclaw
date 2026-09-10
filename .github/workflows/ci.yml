@@ -1,0 +1,19 @@
+name: ci
+
+# Runs on a pull request. A push to SNET_Telegram goes through
+# deploy-staging.yml instead, which runs these same gates before it publishes,
+# so nothing is checked twice.
+
+on:
+  pull_request:
+    branches:
+      - SNET_Telegram
+  workflow_dispatch:
+
+jobs:
+  build:
+    uses: ./.github/workflows/common.yml
+    with:
+      publish_docker: false
+      core_remote: ${{ vars.CORE_REMOTE }}
+      core_ref: ${{ vars.CORE_REF }}

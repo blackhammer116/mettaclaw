@@ -1,0 +1,47 @@
+name: Deploy (staging)
+
+# Every push to the bot branch builds an image and puts it on the staging
+# server. workflow_dispatch is declared for when this workflow also lives on
+# the default branch; until then GitHub will not offer it, because it only
+# reads dispatchable workflows from there.
+
+on:
+  push:
+    branches:
+      - SNET_Telegram
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    uses: ./.github/workflows/common.yml
+    with:
+      publish_docker: true
+      tag_name: staging-${{ github.sha }}
+      core_remote: ${{ vars.CORE_REMOTE }}
+      core_ref: ${{ vars.CORE_REF }}
+    secrets:
+      REGISTRY_USERNAME: ${{ github.actor }}
+      REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+
+  deploy:
+    needs: build
+    uses: ./.github/workflows/deploy.yml
+    with:
+      image: ${{ needs.build.outputs.image }}
+      target: staging
+      env_slug: staging
+    secrets:
+      INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID_STAGING }}
+      INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET_STAGING }}
+      INFISICAL_PROJECT_SLUG: ${{ secrets.INFISICAL_PROJECT_SLUG }}
+      SSH_HOST: ${{ secrets.SSH_HOST_STAGING }}
+      SSH_USER: ${{ secrets.SSH_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
