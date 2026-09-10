@@ -1,0 +1,8 @@
+name: probe ssh
+on: push
+jobs:
+  never:
+    runs-on: ubuntu-latest
+    if: false
+    steps:
+      - uses: appleboy/ssh-action@v1.2.0
