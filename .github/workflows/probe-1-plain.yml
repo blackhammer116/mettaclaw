@@ -1,8 +1,0 @@
-name: probe 1 plain
-on: push
-jobs:
-  probe:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: echo "first-party actions run fine"

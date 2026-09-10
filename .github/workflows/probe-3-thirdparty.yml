@@ -1,0 +1,11 @@
+name: probe 3 third-party
+on: push
+jobs:
+  never:
+    runs-on: ubuntu-latest
+    # Never executes. Startup validation still resolves every `uses:` in the
+    # file, so a blocked action fails the run before this is evaluated.
+    if: false
+    steps:
+      - uses: appleboy/ssh-action@v1.2.0
+      - uses: Infisical/secrets-action@v1.0.7
