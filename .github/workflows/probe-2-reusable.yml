@@ -1,0 +1,8 @@
+name: probe 2 reusable
+on: push
+jobs:
+  probe:
+    uses: ./.github/workflows/common.yml
+    with:
+      publish_docker: false
+      run_tests: true
