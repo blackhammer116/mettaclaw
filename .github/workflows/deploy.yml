@@ -5,6 +5,13 @@ name: deploy
 # restarted automatically, so they share this one definition rather than a
 # copy each.
 #
+# Infisical is read over its HTTP API and the server is reached with plain ssh,
+# rather than through the actions that wrap them. This organisation allows only
+# GitHub-owned and verified-creator actions, so `Infisical/secrets-action` and
+# `appleboy/ssh-action` are refused before the run starts. Calling both directly
+# also means a workflow holding production keys and an ssh private key trusts
+# no unverified third party.
+#
 # Secrets never reach the image or the agent. The container starts under core's
 # own entrypoint, which brings up the credential proxy while the keys are still
 # in the environment, scrubs them, and drops privileges. The plugin reaches its
@@ -30,6 +37,11 @@ on:
         required: false
         default: false
         type: boolean
+      infisical_domain:
+        description: 'Infisical instance to read from'
+        required: false
+        default: 'https://app.infisical.com'
+        type: string
     secrets:
       # Passed in by name rather than inherited, because staging and production
       # authenticate to Infisical as different machine identities and so keep
@@ -52,71 +64,60 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Fetch secrets from Infisical
-        uses: Infisical/secrets-action@v1.0.7
-        with:
-          client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
-          client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
-          project-slug: ${{ secrets.INFISICAL_PROJECT_SLUG }}
-          env-slug: ${{ inputs.env_slug }}
+        env:
+          DOMAIN: ${{ inputs.infisical_domain }}
+          CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          PROJECT_SLUG: ${{ secrets.INFISICAL_PROJECT_SLUG }}
+          ENV_SLUG: ${{ inputs.env_slug }}
+        run: |
+          set -euo pipefail
+
+          # Machine-identity login. The body is built by jq so a value
+          # containing a quote or backslash cannot break out of the JSON.
+          login=$(curl -sS --max-time 30 -X POST \
+            "${DOMAIN}/api/v1/auth/universal-auth/login" \
+            -H 'Content-Type: application/json' \
+            -d "$(jq -n --arg i "$CLIENT_ID" --arg s "$CLIENT_SECRET" \
+                    '{clientId:$i, clientSecret:$s}')")
+          token=$(jq -r '.accessToken // empty' <<<"$login")
+          if [ -z "$token" ]; then
+            # The message names the cause without echoing what was sent.
+            echo "::error::Infisical login failed: $(jq -r '.message // "no accessToken in response"' <<<"$login")"
+            exit 1
+          fi
+          echo "::add-mask::$token"
+
+          raw=$(curl -sS --max-time 30 -G "${DOMAIN}/api/v3/secrets/raw" \
+            -H "Authorization: Bearer ${token}" \
+            --data-urlencode "workspaceSlug=${PROJECT_SLUG}" \
+            --data-urlencode "environment=${ENV_SLUG}" \
+            --data-urlencode "secretPath=/")
+          count=$(jq '.secrets | length' <<<"$raw" 2>/dev/null || echo 0)
+          if [ "$count" -eq 0 ]; then
+            echo "::error::no secrets in Infisical project ${PROJECT_SLUG} environment ${ENV_SLUG}"
+            exit 1
+          fi
+
+          # Mask before exporting, so a value cannot surface in a later log
+          # line. The heredoc form of GITHUB_ENV keeps multi-line values whole.
+          for key in $(jq -r '.secrets[].secretKey' <<<"$raw"); do
+            value=$(jq -r --arg k "$key" \
+              '.secrets[] | select(.secretKey==$k) | .secretValue' <<<"$raw")
+            echo "::add-mask::$value"
+            printf '%s<<INFISICAL_EOF\n%s\nINFISICAL_EOF\n' "$key" "$value" >> "$GITHUB_ENV"
+          done
+          echo "read $count secrets from ${ENV_SLUG}"
 
       - name: Deploy to ${{ inputs.target }}
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          envs: IMAGE,RESTART,GHCR_USER,GHCR_TOKEN,ASI_API_KEY,OPENAI_API_KEY,ANTHROPIC_API_KEY,OPENROUTER_API_KEY,TG_BOT_TOKEN,TG_CHAT_ID,LLM_PROVIDER,LLM_MODEL
-          script: |
-            set -e
-            mkdir -p /omega
-
-            # A breadcrumb, not the credentials: enough of each key to tell
-            # which one is in use, and nothing an attacker could spend. The
-            # real values arrive through -e below, which overrides --env-file.
-            tee /omega/.env > /dev/null <<EOF
-            ASI_API_KEY=...${ASI_API_KEY: -5}
-            OPENAI_API_KEY=...${OPENAI_API_KEY: -5}
-            ANTHROPIC_API_KEY=...${ANTHROPIC_API_KEY: -5}
-            OPENROUTER_API_KEY=...${OPENROUTER_API_KEY: -5}
-            TG_BOT_TOKEN=...${TG_BOT_TOKEN: -5}
-            TG_CHAT_ID=${TG_CHAT_ID}
-            LLM_PROVIDER=${LLM_PROVIDER}
-            LLM_MODEL=${LLM_MODEL}
-            EOF
-            chmod 600 /omega/.env
-
-            mkdir -p /Backup/docker/PeTTa
-
-            # The package is private, so the pull needs a login even here.
-            echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GHCR_USER}" --password-stdin
-            docker pull "${IMAGE}"
-            docker rm -f omega 2>/dev/null || true
-
-            # The prompt ships inside the plugin at plugins/telegram/prompt.txt
-            # and is read from there, so it is not copied out of the image and
-            # mounted back. To override it, mount a file and point
-            # TG_PROMPT_PATH at it.
-            docker run -d \
-              --name omega \
-              ${RESTART:+--restart=always} \
-              --env-file /omega/.env \
-              -e ASI_API_KEY="${ASI_API_KEY}" \
-              -e OPENAI_API_KEY="${OPENAI_API_KEY}" \
-              -e ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY}" \
-              -e OPENROUTER_API_KEY="${OPENROUTER_API_KEY}" \
-              -e TG_BOT_TOKEN="${TG_BOT_TOKEN}" \
-              -v /Backup/docker/PeTTa:/PeTTa/repos/Omega/memory \
-              "${IMAGE}" \
-              commchannel=telegram \
-              TG_CHAT_ID=${TG_CHAT_ID} \
-              provider=${LLM_PROVIDER} \
-              ${LLM_MODEL:+LLM=${LLM_MODEL}} \
-              embeddingprovider=OpenAI
         env:
           IMAGE: ${{ inputs.image }}
           RESTART: ${{ inputs.restart && '1' || '' }}
           GHCR_USER: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
           ASI_API_KEY: ${{ env.ASI_API_KEY }}
           OPENAI_API_KEY: ${{ env.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ env.ANTHROPIC_API_KEY }}
@@ -125,3 +126,79 @@ jobs:
           TG_CHAT_ID: ${{ env.CHAT_ID }}
           LLM_PROVIDER: ${{ vars.LLM_PROVIDER || 'OpenRouter' }}
           LLM_MODEL: ${{ vars.LLM_MODEL }}
+        run: |
+          set -euo pipefail
+
+          key=$(mktemp)
+          chmod 600 "$key"
+          trap 'shred -u "$key" 2>/dev/null || rm -f "$key"' EXIT
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$key"
+
+          # The remote script is piped to `bash -s` rather than passed as an
+          # argument, so nothing in it is re-parsed by the local shell. Its
+          # inputs arrive as an exported prelude quoted by printf %q, which is
+          # what keeps a key containing a space or a quote intact.
+          {
+            printf 'export IMAGE=%q RESTART=%q GHCR_USER=%q GHCR_TOKEN=%q\n' \
+              "$IMAGE" "$RESTART" "$GHCR_USER" "$GHCR_TOKEN"
+            printf 'export ASI_API_KEY=%q OPENAI_API_KEY=%q\n' \
+              "$ASI_API_KEY" "$OPENAI_API_KEY"
+            printf 'export ANTHROPIC_API_KEY=%q OPENROUTER_API_KEY=%q\n' \
+              "$ANTHROPIC_API_KEY" "$OPENROUTER_API_KEY"
+            printf 'export TG_BOT_TOKEN=%q TG_CHAT_ID=%q\n' \
+              "$TG_BOT_TOKEN" "$TG_CHAT_ID"
+            printf 'export LLM_PROVIDER=%q LLM_MODEL=%q\n' \
+              "$LLM_PROVIDER" "$LLM_MODEL"
+            cat <<'REMOTE'
+          set -e
+          mkdir -p /omega
+
+          # A breadcrumb, not the credentials: enough of each key to tell which
+          # one is in use, and nothing an attacker could spend. The real values
+          # arrive through -e below, which overrides --env-file.
+          tee /omega/.env > /dev/null <<EOF
+          ASI_API_KEY=...${ASI_API_KEY: -5}
+          OPENAI_API_KEY=...${OPENAI_API_KEY: -5}
+          ANTHROPIC_API_KEY=...${ANTHROPIC_API_KEY: -5}
+          OPENROUTER_API_KEY=...${OPENROUTER_API_KEY: -5}
+          TG_BOT_TOKEN=...${TG_BOT_TOKEN: -5}
+          TG_CHAT_ID=${TG_CHAT_ID}
+          LLM_PROVIDER=${LLM_PROVIDER}
+          LLM_MODEL=${LLM_MODEL}
+          EOF
+          chmod 600 /omega/.env
+
+          mkdir -p /Backup/docker/PeTTa
+
+          # The package is private, so the pull needs a login even here.
+          echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GHCR_USER}" --password-stdin
+          docker pull "${IMAGE}"
+          docker rm -f omega 2>/dev/null || true
+
+          # The prompt ships inside the plugin at plugins/telegram/prompt.txt and
+          # is read from there, so it is not copied out of the image and mounted
+          # back. To override it, mount a file and point TG_PROMPT_PATH at it.
+          docker run -d \
+            --name omega \
+            ${RESTART:+--restart=always} \
+            --env-file /omega/.env \
+            -e ASI_API_KEY="${ASI_API_KEY}" \
+            -e OPENAI_API_KEY="${OPENAI_API_KEY}" \
+            -e ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY}" \
+            -e OPENROUTER_API_KEY="${OPENROUTER_API_KEY}" \
+            -e TG_BOT_TOKEN="${TG_BOT_TOKEN}" \
+            -v /Backup/docker/PeTTa:/PeTTa/repos/Omega/memory \
+            "${IMAGE}" \
+            commchannel=telegram \
+            TG_CHAT_ID=${TG_CHAT_ID} \
+            provider=${LLM_PROVIDER} \
+            ${LLM_MODEL:+LLM=${LLM_MODEL}} \
+            embeddingprovider=OpenAI
+
+          docker ps --filter name=omega --format 'started {{.Names}} from {{.Image}}'
+          REMOTE
+          } | ssh -i "$key" \
+                -o StrictHostKeyChecking=accept-new \
+                -o BatchMode=yes \
+                -o ConnectTimeout=20 \
+                "${SSH_USER}@${SSH_HOST}" bash -s

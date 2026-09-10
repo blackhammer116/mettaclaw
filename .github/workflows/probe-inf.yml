@@ -1,8 +1,0 @@
-name: probe inf
-on: push
-jobs:
-  never:
-    runs-on: ubuntu-latest
-    if: false
-    steps:
-      - uses: Infisical/secrets-action@v1.0.7
