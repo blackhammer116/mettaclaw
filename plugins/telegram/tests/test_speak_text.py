@@ -17,6 +17,8 @@ from text_splitter import split_for_telegram
 
 class SpeakTextTests(unittest.TestCase):
     def setUp(self):
+        # Isolate per-piece validation tests from sentence packing.
+        self.enterContext(patch.object(mh, "speech_chunks", side_effect=lambda parts: [[p] for p in parts]))
         config = types.ModuleType("config")
         config.config_get_by_key = lambda key, default=None: default
         self.enterContext(patch.dict(sys.modules, {"config": config}))
@@ -67,20 +69,20 @@ class SpeakTextTests(unittest.TestCase):
                 self.assertEqual(mh.speak(argument), "VOICE_SENT")
                 self.assertEqual(self.delivered(), [text.replace("\\n", "\n")])
 
-    def test_synthesis_failure_stops(self):
-        self.synth.side_effect = [b"first", None]
+    def test_synthesis_failure_continues(self):
+        self.synth.side_effect = [b"first", None, b"third"]
         result = mh.speak("x" * 9000)
         self.assertIn("part 2/3", result)
-        self.assertIn("1 parts already sent", result)
-        self.assertEqual(self.delivered(), ["first"])
-        self.assertEqual(self.synth.call_count, 2)
+        self.assertIn("2 parts already sent", result)
+        self.assertEqual(self.delivered(), ["first", "third"])
+        self.assertEqual(self.synth.call_count, 3)
 
-    def test_send_failure_stops(self):
-        self.send.side_effect = [None, RuntimeError("upload failed")]
+    def test_send_failure_continues(self):
+        self.send.side_effect = [None, RuntimeError("upload failed"), None]
         result = mh.speak("x" * 9000)
-        self.assertIn("could not confirm delivery of part 2/3", result)
-        self.assertEqual(self.synth.call_count, 2)
-        self.assertEqual(self.send.call_count, 2)
+        self.assertIn("part 2/3: delivery uncertain", result)
+        self.assertEqual(self.synth.call_count, 3)
+        self.assertEqual(self.send.call_count, 3)
 
     def test_empty_normalized_input(self):
         self.assertTrue(mh.speak("\\n\\n").startswith("VOICE_INVALID_INPUT"))

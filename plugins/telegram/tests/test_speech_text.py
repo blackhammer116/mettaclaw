@@ -8,6 +8,21 @@ from speech_text import prepare_speech
 
 
 class SpeechTextTests(unittest.TestCase):
+    def test_url_filter_without_linkify(self):
+        for url in ('example.com', 'docs.example.org/guide?q=1#part',
+                    'EXAMPLE.COM:8080/path', 'www.example.xyz/path',
+                    'https://example.xyz/path', 'http://localhost:8080/help'):
+            with self.subTest(url=url):
+                self.assertEqual(prepare_speech(f'Read {url} now'), 'Read now')
+
+    def test_url_filter_preserves_nonlinks_and_sentence_punctuation(self):
+        text = 'v2.0 3.14 report.pdf module.py user@example.com user@docs.example.com'
+        self.assertEqual(prepare_speech(text), text)
+        self.assertEqual(prepare_speech('Visit example.com. Next sentence!'),
+                         'Visit . Next sentence!')
+        self.assertEqual(prepare_speech('example.unlisted example.com.unlisted'),
+                         'example.unlisted example.com.unlisted')
+
     def test_nested_formatting_and_link_destination(self):
         self.assertEqual(prepare_speech(
             '[**Read _this_ guide**](https://example.com/a(b(c)) "title")'),

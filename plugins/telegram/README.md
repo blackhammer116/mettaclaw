@@ -88,6 +88,8 @@ they belong to the proxy, not here.
 | `TG_POLICY_PATH` | no | Path to the user-facing policy text, defaults to the shipped one |
 | `TG_PROMPT_PATH` | no | Path to the prompt section, defaults to the shipped one |
 
+## Voice replies
+
 Voice precedence is runtime `EDGE_TTS_VOICE=...`, then environment
 `OMEGA_EDGE_TTS_VOICE`, then environment `EDGE_TTS_VOICE`, then the
 `EDGE_TTS_VOICE` YAML setting. Empty environment values are ignored.
@@ -95,50 +97,24 @@ Both environment names survive the container entrypoint. `scripts/omega`
 forwards the voice from its environment; staging/production deployments read
 the GitHub Actions variable `EDGE_TTS_VOICE`. Restart after changing the voice.
 
-Speech language routing is automatic; no language-mode setting is required.
-The local Lingua detector examines the cleaned speech text sentence by sentence
-and line by line. English uses the default English voice; an explicitly
-configured voice is retained whenever its language matches the detected text,
-regardless of gender. The existing configuration precedence is unchanged.
-Other languages use a voice matching the configured voice's gender, as reported
-by the Edge TTS catalogue: a male default selects male voices and a female
-default selects female voices. Russian prefers `ru-RU-SvetlanaNeural` for a
-female default. Returning to the configured language restores the exact
-configured voice. The catalogue is fetched
-only when switching languages and cached after a successful request. Detection itself is offline;
-voice discovery and synthesis require network access.
-
-Mixed-language sentences/lines are delivered in order, merging adjacent pieces
-that use the same voice before applying the usual 4096-character splitting.
-Language changes *within* a sentence use its dominant detected language, not
-word-by-word switching. Short or uncertain text retains the configured voice
-regardless of gender; detection is heuristic and does
-not guarantee every language or phrase.
-If a detected language has no voice of the configured gender, that segment
-falls back to the configured voice and logs a warning; other segments continue
-their normal routing. This contains unsupported-language misdetections without
-discarding the whole reply, though fallback pronunciation may be imperfect.
-An unknown gender for the configured voice or a failed catalogue request still
-returns `VOICE_FAILED` without synthesising the request. It never silently
-switches gender.
-Install the plugin requirements to include `lingua-language-detector`; its
-models load lazily and add memory usage on the first speech request.
-
-Speech uses the Pyromark parser to remove Markdown formatting and image
-descriptions while retaining link labels (including reference links), code
-contents, and paragraph breaks. URLs and emoji are removed as a separate
-speech-only cleanup step. Install the updated plugin requirements or rebuild
-the Docker image to include `pyromark`.
-This does not change text replies. Empty input or text
-containing only removed content returns `VOICE_INVALID_INPUT` without creating
-audio. Long cleaned text is split into ordered voice messages.
-The recording indicator refreshes every four seconds during synthesis and
-upload. Refreshing stops when speech completes or fails; indicator errors do
-not prevent voice delivery.
-
-Vision defaults to Anthropic because an OpenRouter account whose data policy
-excludes vision providers gets a 404 on every vision model while text and image
-generation keep working.
+- The whole reply's main language selects one voice, preserving configured gender.
+  Foreign words use that same voice; pronunciation or character coverage may vary.
+  Unsupported language/gender combinations use the configured voice; invalid
+  voice names fall back to `en-US-AriaNeural` with a warning.
+- Markdown, image descriptions, common URLs and emoji are removed from speech,
+  not text replies. Link labels and paragraph breaks remain. Empty cleaned
+  input returns `VOICE_INVALID_INPUT`.
+- Same-voice sentences are grouped into text chunks of at most 4096 characters
+  and synthesized directly. Chunks end at sentence boundaries; oversized
+  sentences split at whitespace, with hard cuts only for oversized tokens.
+  No per-sentence voice switching is done. A failed chunk is retried sentence by
+  sentence. The recording indicator refreshes throughout processing.
+- Failed segments produce a text notice without discarding successful audio.
+  Exact-text retries for the same inbound message skip confirmed deliveries;
+  uncertain uploads are never automatically repeated while tracked. A voice-only
+  in-memory cache retains the 100 most recently used requests; restart or eviction
+  loses retry protection. No database is used. New messages and paraphrased
+  requests are not deduplicated; existing SQLite files are left untouched.
 
 ## Location
 

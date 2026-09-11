@@ -1055,21 +1055,13 @@ class _TelegramChannel:
             self.loop,
         )
         try:
-            fut.result(timeout=30)
+            result = fut.result(timeout=30)
             logging.info(f"send_voice: delivered to {target_chat_id}")
+            return getattr(result, "message_id", None)
         except Exception as e:
-            logging.error(f"Failed to send voice (retrying without caption/reply): {e}")
-            fut_fallback = asyncio.run_coroutine_threadsafe(
-                self.bot.send_voice(chat_id=target_chat_id,
-                                    voice=BufferedInputFile(audio_bytes, filename="voice.mp3")),
-                self.loop,
-            )
-            try:
-                fut_fallback.result(timeout=30)
-                logging.info(f"send_voice: delivered to {target_chat_id} (fallback, no caption)")
-            except Exception as e2:
-                logging.error(f"Failed to send voice: {e2}")
-                raise
+            fut.cancel()
+            logging.error(f"Voice delivery uncertain; not uploading again: {e}")
+            raise
 
     def send_photo(self, image_bytes, caption=None, chat_id=None, reply_to_id=None):
         """Send a photo to the active chat, dispatched to the bot's event loop.
@@ -1228,7 +1220,7 @@ def send_photo(image_bytes, caption=None):
 
 def send_voice(audio_bytes, caption=None):
     """Send a generated voice message to the active Telegram chat."""
-    _channel.send_voice(audio_bytes, caption=caption,
+    return _channel.send_voice(audio_bytes, caption=caption,
                         chat_id=_channel.chat_id,
                         reply_to_id=getattr(_channel, "_reply_to_id", None))
 

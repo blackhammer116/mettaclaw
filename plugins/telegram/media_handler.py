@@ -5,8 +5,9 @@ import time
 import logging
 import sys
 from contextlib import contextmanager
+from collections import OrderedDict
 from speech_text import prepare_speech
-from speech_language import speech_parts
+from speech_language import speech_parts, speech_chunks
 
 logger = logging.getLogger(__name__)
 
@@ -347,6 +348,42 @@ def generate_and_send(prompt):
 
 DEFAULT_TTS_VOICE = "en-US-AriaNeural"
 RECORDING_REFRESH_SECONDS = 4
+MAX_VOICE_REQUESTS = 100
+_voice_requests = OrderedDict()
+_voice_delivery_lock = threading.Lock()
+
+
+class SpeechDelivery:
+    """Voice-only retry state; forgotten after restart or cache eviction."""
+
+    def __init__(self, request_id):
+        self.request_id = request_id
+        with _voice_delivery_lock:
+            self._parts = _voice_requests.setdefault(request_id, {})
+            _voice_requests.move_to_end(request_id)
+            while len(_voice_requests) > MAX_VOICE_REQUESTS:
+                _voice_requests.popitem(last=False)
+
+    def _touch(self):
+        # Retain an active instance's state after eviction without reviving it
+        # or touching a newer entry created with the same request ID.
+        if _voice_requests.get(self.request_id) is self._parts:
+            _voice_requests.move_to_end(self.request_id)
+
+    def get(self, part):
+        with _voice_delivery_lock:
+            self._touch()
+            return self._parts.get(part, {}).get("state", "pending")
+
+    def set(self, part, state, message_id=None):
+        self.set_many([part], state, message_id)
+
+    def set_many(self, parts, state, message_id=None):
+        """Update all segments in one voice upload under the same lock."""
+        updates = {part: {"state": state, "message_id": message_id} for part in parts}
+        with _voice_delivery_lock:
+            self._touch()
+            self._parts.update(updates)
 
 
 @contextmanager
@@ -439,21 +476,85 @@ def speak(text=""):
     voice = config_get_by_key("EDGE_TTS_VOICE", DEFAULT_TTS_VOICE)
     if _live_send_voice is None:
         return "VOICE_FAILED: no channel is registered to send it"
+    target = (_live_channel, getattr(_live_channel, "chat_id", None),
+              getattr(_live_channel, "_reply_to_id", None))
+    ledger = None
+    if target[1] is not None and target[2] is not None:
+        request_id = hashlib.sha256(repr((target[1:], text, voice)).encode()).hexdigest()
+        try:
+            ledger = SpeechDelivery(request_id)
+        except Exception:
+            logger.exception("Could not initialize voice retry tracking")
+            return "VOICE_FAILED: delivery checkpoint unavailable; no audio sent"
+    failures = []
+    sent = 0
+    def deliver(chunk, allow_split=True):
+        nonlocal sent
+        indices = [i for i, _, _ in chunk]
+        chunk_text = "".join(piece for _, piece, _ in chunk)
+        chunk_voice = chunk[0][2]
+        try:
+            audio = _synthesise_speech(chunk_text, chunk_voice) if chunk_voice else None
+        except Exception:
+            logger.exception("Speech chunk synthesis failed")
+            audio = None
+        if not audio:
+            if allow_split and len(chunk) > 1:
+                for part in chunk:
+                    deliver([part], allow_split=False)
+            else:
+                failures.extend((i, piece, "synthesis failed") for i, piece, _ in chunk)
+                if ledger:
+                    ledger.set_many(indices, "failed")
+            return
+        if (getattr(_live_channel, "chat_id", None),
+                getattr(_live_channel, "_reply_to_id", None)) != target[1:]:
+            failures.extend((i, piece, "conversation changed") for i, piece, _ in chunk)
+            return
+        if ledger:
+            ledger.set_many(indices, "uploading")
+        try:
+            message_id = _live_send_voice(audio)
+            if ledger:
+                ledger.set_many(indices, "sent", message_id)
+            sent += len(indices)
+        except Exception:
+            logger.exception("Voice chunk delivery uncertain")
+            if ledger:
+                ledger.set_many(indices, "uncertain")
+            failures.extend((i, piece, "delivery uncertain; do not resend") for i, piece, _ in chunk)
+
     with _recording_indicator():
         try:
             pieces = speech_parts(text, voice)
         except Exception as exc:
             logger.exception("Could not select speech voices")
             return f"VOICE_FAILED: could not select a language-compatible voice: {exc}"
+        pending = []
         for index, (piece, voice) in enumerate(pieces):
-            audio_bytes = _synthesise_speech(piece, voice)
-            if not audio_bytes:
-                return (f"VOICE_FAILED: could not synthesise part {index + 1}/{len(pieces)}; "
-                        f"{index} parts already sent")
+            state = ledger.get(index) if ledger else "pending"
+            if state == "sent":
+                sent += 1
+                continue
+            if state in ("uploading", "uncertain"):
+                failures.append((index, piece, "delivery uncertain; do not resend"))
+                continue
+            pending.append((index, piece, voice))
+        for chunk in speech_chunks(pending):
+            deliver(chunk)
+    if failures:
+        details = "; ".join(f"part {i + 1}/{len(pieces)}: {reason} ({piece[:80]})"
+                            for i, piece, reason in failures)
+        if (_live_channel is not None and getattr(_live_channel, "chat_id", None) == target[1]
+                and (ledger is None or ledger.get(-1) == "pending")):
             try:
-                _live_send_voice(audio_bytes)
-            except Exception as e:
-                logger.error(f"Failed to send voice message: {e}")
-                return (f"VOICE_FAILED: could not confirm delivery of part {index + 1}/{len(pieces)}; "
-                        f"{index} parts already sent: {e}")
+                if ledger:
+                    ledger.set(-1, "uploading")
+                _live_channel.send_message("Some speech could not be delivered: " + details[:3000],
+                                           chat_id=target[1], reply_to_id=target[2])
+                if ledger:
+                    ledger.set(-1, "sent")
+            except Exception:
+                logger.exception("Could not deliver speech failure notice")
+        return f"{'VOICE_PARTIAL' if sent else 'VOICE_FAILED'}: {sent} parts already sent; {details}"
     return "VOICE_SENT"

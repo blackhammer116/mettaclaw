@@ -1,4 +1,5 @@
 """Shared paragraph/line splitting for Telegram text and speech."""
+import re
 
 TELEGRAM_TEXT_LIMIT = 4096
 
@@ -26,6 +27,12 @@ def _hard_cut(text, fits):
         take = min(len(text), TELEGRAM_TEXT_LIMIT)
         while take > 1 and not fits(text[:take]):
             take = take * 3 // 4
+        if take < len(text):
+            sentences = list(re.finditer(r"[.!?。！？]\s+", text[:take]))
+            spaces = list(re.finditer(r"\s+", text[:take]))
+            boundaries = sentences or spaces
+            if boundaries:
+                take = boundaries[-1].end()
         yield text[:take]
         text = text[take:]
 
@@ -63,4 +70,3 @@ def split_for_telegram(text, fits=None):
             else:
                 pieces.extend(_hard_cut(line, fits))
     return [piece for piece in pieces if piece.strip()]
-

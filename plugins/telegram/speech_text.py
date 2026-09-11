@@ -3,6 +3,26 @@ from html.parser import HTMLParser
 import re
 
 import pyromark
+import emoji
+
+# Deliberately conservative bare-domain suffixes: avoid treating arbitrary
+# dotted filenames/version strings as links. Schemed and www URLs need no list.
+_URL = re.compile(r"""
+    (?<![\w@./-])
+    (?:
+        (?:https?://|www\.)[^\s<>"'\])}]+
+        |
+        (?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+
+        (?:com|org|net|edu|gov|io|ai|co|dev|app|info|biz|me|uk|de|fr|cn|ru|ua|et)
+        (?![\w-]|\.[a-z0-9])
+        (?::[0-9]+)?(?:[/?\#][^\s<>"'\])}]*)?
+    )
+""", re.IGNORECASE | re.VERBOSE)
+
+
+def _remove_urls(text):
+    # Retain punctuation after a URL, e.g. "Read example.com." -> "Read .".
+    return _URL.sub(lambda match: match[0][len(match[0].rstrip(".,;:!?")):], text)
 
 
 class _HTMLText(HTMLParser):
@@ -68,10 +88,10 @@ def _markdown_text(text):
 def prepare_speech(text):
     text = _markdown_text(text.replace("\\n", "\n"))
     # Bare URLs are speech policy, not Markdown syntax.
-    text = re.sub(r"(?:https?://|www\.)[^\s<>]+", "", text)
+    text = _remove_urls(text)
     # Emoji, their joiners/modifiers and keycap sequences, preserving ordinary
     # digits, punctuation and non-Latin letters.
-    text = re.sub(r"[0-9#*]\ufe0f?\u20e3", "", text)
+    text = emoji.replace_emoji(text, replace="")
     text = re.sub(r"[\U0001f000-\U0001faff\u2600-\u27bf\u200d\ufe0f\u20e3]", "", text)
     text = re.sub(r"[ \t]+", " ", text)
     text = "\n".join(line.strip() for line in text.splitlines()).strip()

@@ -6,6 +6,7 @@ import threading
 import time
 import types
 from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _PLUGIN_DIR = os.path.dirname(_HERE)
@@ -435,6 +436,30 @@ def test_send_voice_dispatches_expected_aiogram_call():
     finally:
         loop.call_soon_threadsafe(loop.stop)
         t.join(timeout=2)
+
+
+def test_voice_timeout_cancels_without_second_upload():
+    ch = _new_channel()
+    ch.bot = FakeBot()
+    ch.connected = True
+    ch.chat_id = "555"
+    ch.loop = object()
+    future = Mock()
+    future.result.side_effect = TimeoutError("unknown delivery")
+
+    def schedule(coroutine, loop):
+        coroutine.close()
+        return future
+
+    with patch.object(tm.asyncio, "run_coroutine_threadsafe", side_effect=schedule) as submit:
+        try:
+            ch.send_voice(b"audio-bytes")
+        except TimeoutError:
+            pass
+        else:
+            raise AssertionError("uncertain upload must be reported")
+        submit.assert_called_once()
+        future.cancel.assert_called_once()
 
 
 def test_admin_command_refuses_non_admin_allows_admin():

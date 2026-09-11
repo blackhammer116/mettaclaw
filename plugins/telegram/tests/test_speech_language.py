@@ -26,6 +26,8 @@ RUSSIAN = "Это проверка русского голоса. Пожалуй
 
 class SpeechLanguageTests(unittest.TestCase):
     def setUp(self):
+        self.enterContext(patch.object(mh, "speech_chunks", side_effect=lambda parts: [[p] for p in parts]))
+        sl.validated_voice.cache_clear()
         self.catalogue = self.enterContext(patch.object(
             sl, "available_voices", return_value=VOICES))
 
@@ -63,7 +65,7 @@ class SpeechLanguageTests(unittest.TestCase):
     def test_uncertain_short_text_uses_configured_voice(self):
         self.assertEqual(sl.speech_parts("OK", "en-GB-SoniaNeural"),
                          [("OK", "en-GB-SoniaNeural")])
-        self.catalogue.assert_not_called()
+        self.catalogue.assert_called()
 
     def test_alphabetically_first_male_voice_is_skipped(self):
         self.assertEqual(sl.select_voice("fr", sl.DEFAULT_VOICE), "fr-FR-DeniseNeural")
@@ -81,11 +83,11 @@ class SpeechLanguageTests(unittest.TestCase):
                 {"Locale": "ru-RU", "ShortName": "ru-RU-SvetlanaNeural", "Gender": gender}]
             self.assertEqual(sl.select_voice("ru", sl.DEFAULT_VOICE), sl.DEFAULT_VOICE)
 
-    def test_dynamic_switch_then_return_to_configured_male_voice(self):
+    def test_whole_reply_keeps_one_male_voice(self):
         text = "Hello, this is an English sentence.\n" + RUSSIAN + "\nHello, this is an English sentence."
         parts = sl.speech_parts(text, "en-US-GuyNeural")
         self.assertEqual([voice for _, voice in parts],
-                         ["en-US-GuyNeural", "ru-RU-DmitryNeural", "en-US-GuyNeural"])
+                         ["en-US-GuyNeural"] * 4)
 
     def test_male_configuration_does_not_fall_back_to_female(self):
         self.assertEqual(sl.select_voice("uk", "en-US-GuyNeural"), "en-US-GuyNeural")
@@ -94,8 +96,8 @@ class SpeechLanguageTests(unittest.TestCase):
         text = "Hello, this is an English sentence.\nOmega Claw v2\nПривет, мир!\nThis is the final English sentence."
         config = types.ModuleType("config")
         config.config_get_by_key = lambda key, default=None: default
-        # Force the reported misclassification; do not depend on detector scores.
-        with patch.object(sl, "detect_language", side_effect=["en", "la", "ru", "en"]), \
+        # Only the whole reply is classified, never its individual lines.
+        with patch.object(sl, "detect_language", return_value="en") as detect, \
                 patch.dict(sys.modules, {"config": config}), \
                 patch.object(mh, "_tts_allowed", return_value=True), \
                 patch.object(mh, "_prompt_is_unsafe", return_value=False), \
@@ -104,9 +106,10 @@ class SpeechLanguageTests(unittest.TestCase):
                 patch.object(mh, "_live_send_voice") as send:
             self.assertEqual(mh.speak(text), "VOICE_SENT")
             self.assertEqual([call.args[1] for call in synth.call_args_list],
-                             [sl.DEFAULT_VOICE, "ru-RU-SvetlanaNeural", sl.DEFAULT_VOICE])
+                             [sl.DEFAULT_VOICE] * 4)
+            detect.assert_called_once_with(text)
             self.assertEqual("\n".join(call.args[0].strip() for call in synth.call_args_list), text)
-            self.assertEqual(send.call_count, 3)
+            self.assertEqual(send.call_count, 4)
 
     def test_unknown_configured_gender_fails_on_language_switch(self):
         for configured in ("en-US-UnknownNeural", sl.DEFAULT_VOICE):
@@ -122,7 +125,24 @@ class SpeechLanguageTests(unittest.TestCase):
         text = "Hello, this is an English sentence.\n" + RUSSIAN + "\nHello, this is an English sentence."
         parts = sl.speech_parts(text)
         self.assertEqual([voice for _, voice in parts],
-                         [sl.DEFAULT_VOICE, "ru-RU-SvetlanaNeural", sl.DEFAULT_VOICE])
+                         [sl.DEFAULT_VOICE] * 4)
+
+    def test_main_language_is_not_the_first_phrase_or_first_4096_characters(self):
+        english = "The weather is sunny today and we are going to walk through the park together. "
+        for prefix in ("Привет. ", "你好。 ", "Bonjour. "):
+            text = prefix + english * 100
+            with self.subTest(prefix=prefix):
+                self.assertEqual(sl.detect_language(text), "en")
+                parts = sl.speech_parts(text, "en-US-GuyNeural")
+                self.assertTrue(all(voice == "en-US-GuyNeural" for _, voice in parts))
+
+    def test_one_detection_and_voice_for_all_sentences(self):
+        text = "Hello. Привет. Bonjour."
+        with patch.object(sl, "detect_language", return_value="ru") as detect:
+            parts = sl.speech_parts(text)
+        detect.assert_called_once_with(text)
+        self.assertEqual({voice for _, voice in parts}, {"ru-RU-SvetlanaNeural"})
+        self.assertEqual("".join(piece for piece, _ in parts), text)
         self.assertEqual(" ".join(piece.strip() for piece, _ in parts),
                          text.replace("\n", " "))
 
@@ -132,7 +152,7 @@ class SpeechLanguageTests(unittest.TestCase):
         self.assertGreater(len(parts), 1)
         self.assertTrue(all(0 < len(piece) <= 4096 for piece, _ in parts))
         self.assertTrue(all(voice == "ru-RU-SvetlanaNeural" for _, voice in parts))
-        self.assertEqual([piece for piece, _ in parts], sl.split_for_telegram(text))
+        self.assertEqual("".join(piece for piece, _ in parts), text)
 
     def test_speak_routes_cleaned_text_to_synthesis(self):
         config = types.ModuleType("config")
