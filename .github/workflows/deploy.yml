@@ -194,7 +194,12 @@ jobs:
           # The prompt ships inside the plugin at plugins/telegram/prompt.txt and
           # is read from there, so it is not copied out of the image and mounted
           # back. To override it, mount a file and point TG_PROMPT_PATH at it.
-          docker run -d \
+          # -it as core's own scripts/omega does. nginx logs to /dev/stderr and
+          # runs as www-data, and without a TTY that is the container's stderr
+          # pipe, which www-data cannot open: the proxy dies with
+          # "open() /dev/stderr failed (13: Permission denied)" and takes the
+          # container with it.
+          docker run -d -it \
             --name omega \
             ${RESTART:+--restart=always} \
             --env-file "${env_dir}/.env" \
