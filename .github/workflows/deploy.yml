@@ -161,12 +161,18 @@ jobs:
               "$LLM_PROVIDER" "$LLM_MODEL"
             cat <<'REMOTE'
           set -e
-          mkdir -p /omega
+
+          # Under the deploy user's own home, not /omega: this account has no
+          # sudo and cannot create a directory at the root. Only the docker CLI
+          # reads this file, as this same user, so its location is free.
+          env_dir="${HOME}/omega"
+          mkdir -p "${env_dir}"
+          chmod 700 "${env_dir}"
 
           # A breadcrumb, not the credentials: enough of each key to tell which
           # one is in use, and nothing an attacker could spend. The real values
           # arrive through -e below, which overrides --env-file.
-          tee /omega/.env > /dev/null <<EOF
+          tee "${env_dir}/.env" > /dev/null <<EOF
           ASI_API_KEY=...${ASI_API_KEY: -5}
           OPENAI_API_KEY=...${OPENAI_API_KEY: -5}
           ANTHROPIC_API_KEY=...${ANTHROPIC_API_KEY: -5}
@@ -176,7 +182,7 @@ jobs:
           LLM_PROVIDER=${LLM_PROVIDER}
           LLM_MODEL=${LLM_MODEL}
           EOF
-          chmod 600 /omega/.env
+          chmod 600 "${env_dir}/.env"
 
           mkdir -p /Backup/docker/PeTTa
 
@@ -191,7 +197,7 @@ jobs:
           docker run -d \
             --name omega \
             ${RESTART:+--restart=always} \
-            --env-file /omega/.env \
+            --env-file "${env_dir}/.env" \
             -e ASI_API_KEY="${ASI_API_KEY}" \
             -e OPENAI_API_KEY="${OPENAI_API_KEY}" \
             -e ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY}" \
