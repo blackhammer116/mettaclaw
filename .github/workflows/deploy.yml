@@ -88,14 +88,24 @@ jobs:
           fi
           echo "::add-mask::$token"
 
-          raw=$(curl -sS --max-time 30 -G "${DOMAIN}/api/v3/secrets/raw" \
+          # The status is read separately: a wrong project slug answers 404
+          # with a message that says so, and counting secrets in that body
+          # reports an empty environment instead of the real fault.
+          response=$(curl -sS --max-time 30 -G "${DOMAIN}/api/v3/secrets/raw" \
             -H "Authorization: Bearer ${token}" \
             --data-urlencode "workspaceSlug=${PROJECT_SLUG}" \
             --data-urlencode "environment=${ENV_SLUG}" \
-            --data-urlencode "secretPath=/")
+            --data-urlencode "secretPath=/" \
+            -w '\n%{http_code}')
+          status=${response##*$'\n'}
+          raw=${response%$'\n'*}
+          if [ "$status" != "200" ]; then
+            echo "::error::Infisical read failed (HTTP $status): $(jq -r '.message // "no message"' <<<"$raw")"
+            exit 1
+          fi
           count=$(jq '.secrets | length' <<<"$raw" 2>/dev/null || echo 0)
           if [ "$count" -eq 0 ]; then
-            echo "::error::no secrets in Infisical project ${PROJECT_SLUG} environment ${ENV_SLUG}"
+            echo "::error::Infisical project ${PROJECT_SLUG} environment ${ENV_SLUG} holds no secrets"
             exit 1
           fi
 
